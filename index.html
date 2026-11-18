@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>NUMBER BURST</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #030407; }
+    body { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; inset: 0; pointer-events: none;
+      display: grid; place-items: center;
+    }
+    #counter-wrap {
+      position: absolute;
+      top: 31%;
+      left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+      will-change: transform;
+    }
+    #counter {
+      color: #fff;
+      font-weight: 1000;
+      font-size: clamp(56px, 16vw, 180px);
+      line-height: .92;
+      letter-spacing: -.04em;
+      text-shadow: 0 0 18px rgba(120, 220, 255, .72), 0 0 54px rgba(80, 120, 255, .45), 0 4px 18px rgba(0, 0, 0, .6);
+      white-space: nowrap;
+    }
+    #combo {
+      min-height: 36px;
+      margin-top: 4px;
+      color: #dffcff;
+      font-weight: 900;
+      font-size: clamp(20px, 5vw, 38px);
+      letter-spacing: -.02em;
+      text-shadow: 0 0 18px rgba(255, 120, 220, .8), 0 2px 10px rgba(0, 0, 0, .7);
+      opacity: 0;
+      transition: opacity .12s ease-out;
+    }
+    #flash {
+      position: fixed; inset: 0; pointer-events: none;
+      background: radial-gradient(circle, rgba(255,255,255,.92), rgba(130,190,255,.35) 45%, transparent 78%);
+      opacity: 0;
+      will-change: opacity;
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="hud">
+    <div id="counter-wrap"><div id="counter">0</div><div id="combo"></div></div>
+  </div>
+  <div id="flash"></div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import * as CANNON from 'cannon-es';
+
+    const MAX_BALLS = 100;
+    const HOLD_INTERVAL = 100;
+    const COMBO_WINDOW = 1000;
+    const MAX_SPARKS = 420;
+    const MAX_POPUPS = 24;
+
+    const counterElement = document.getElementById('counter');
+    const counterWrap = document.getElementById('counter-wrap');
+    const comboElement = document.getElementById('combo');
+    const flashElement = document.getElementById('flash');
+
+    let score = 0;
+    let totalEarned = 0;
+    let nextMilestone = 1000;
+    let milestoneCount = 0;
+    let spawnCount = 0;
+    let comboCount = 0;
+    let lastCollisionAt = 0;
+    let counterPulse = 0;
+    let digitPulse = 0;
+    let lastCounterText = '0';
+    let shake = 0;
+    let flash = 0;
+    let pressed = false;
+    let activePointerId = null;
+    let lastSpawnAt = 0;
+    let pointerX = 0;
+    let pointerY = 0;
+    let ballSerial = 0;
+    let audioBudget = 0;
+
+    const balls = [];
+    const popups = [];
+    const sparks = [];
+    const clock = new THREE.Clock();
+    const raycaster = new THREE.Raycaster();
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.16;
+    document.body.prepend(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x030407);
+    scene.fog = new THREE.Fog(0x030407, 11, 27);
+
+    const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, .1, 100);
+    const cameraBase = new THREE.Vector3(0, 5.0, 9.2);
+    const cameraTarget = new THREE.Vector3(0, 1.5, -.5);
+    camera.position.copy(cameraBase);
+    camera.lookAt(cameraTarget);
+
+    scene.add(new THREE.HemisphereLight(0x5f7dff, 0x080810, .9));
+    const keyLight = new THREE.DirectionalLight(0x9fdcff, 1.2);
+    keyLight.position.set(-5, 10, 6);
+    scene.add(keyLight);
+    const rimLight = new THREE.PointLight(0xff44aa, 1.6, 22);
+    rimLight.position.set(4, 2.2, -5);
+    scene.add(rimLight);
+
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(80, 80),
+      new THREE.MeshStandardMaterial({ color: 0x080a10, roughness: .88, metalness: .16 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    scene.add(floor);
+    const grid = new THREE.GridHelper(40, 40, 0x243d64, 0x101826);
+    grid.material.transparent = true;
+    grid.material.opacity = .27;
+    grid.position.y = .005;
+    scene.add(grid);
+
+    const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -18, 0) });
+    world.broadphase = new CANNON.SAPBroadphase(world);
+    world.allowSleep = true;
+    world.solver.iterations = 10;
+    world.defaultContactMaterial.friction = .07;
+    world.defaultContactMaterial.restitution = .82;
+
+    const physicsMaterial = new CANNON.Material('ball');
+    const groundMaterial = new CANNON.Material('ground');
+    world.addContactMaterial(new CANNON.ContactMaterial(groundMaterial, physicsMaterial, {
+      friction: .05,
+      restitution: .88
+    }));
+    world.addContactMaterial(new CANNON.ContactMaterial(physicsMaterial, physicsMaterial, {
+      friction: .04,
+      restitution: .83
+    }));
+
+    const groundBody = new CANNON.Body({ mass: 0, material: groundMaterial, shape: new CANNON.Plane() });
+    groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+    world.addBody(groundBody);
+
+    function makeRadialTexture(inner, mid, edge, alphaEdge = false) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 128;
+      const context = canvas.getContext('2d');
+      const gradient = context.createRadialGradient(64, 64, 1, 64, 64, 64);
+      gradient.addColorStop(0, inner);
+      gradient.addColorStop(.47, mid);
+      gradient.addColorStop(1, edge);
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, 128, 128);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      return texture;
+    }
+
+    const ballTexture = makeRadialTexture('#ffffff', '#d9f7ff', '#232d44');
+    const glowTexture = makeRadialTexture('rgba(255,255,255,.95)', 'rgba(130,230,255,.34)', 'rgba(0,0,0,0)', true);
+    const shadowTexture = makeRadialTexture('rgba(0,0,0,.68)', 'rgba(0,0,0,.26)', 'rgba(0,0,0,0)', true);
+    const glowMaterial = new THREE.SpriteMaterial({
+      map: glowTexture,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+    const shadowMaterial = new THREE.MeshBasicMaterial({
+      map: shadowTexture,
+      transparent: true,
+      depthWrite: false,
+      opacity: .52
+    });
+
+    const ballGeometry = new THREE.SphereGeometry(1, 26, 18);
+    const shadowGeometry = new THREE.PlaneGeometry(1, 1);
+    const palette = [
+      [0x39f6ff, 0x077b91],
+      [0xff4ce1, 0x84107a],
+      [0x8dff4a, 0x26751d],
+      [0xffd54a, 0x8a5a10],
+      [0x708cff, 0x1b2a8f],
+      [0xff6689, 0x8c1435]
+    ].map(([color, emissive]) => new THREE.MeshStandardMaterial({
+      color,
+      emissive,
+      emissiveIntensity: 1.55,
+      roughness: .26,
+      metalness: .12,
+      map: ballTexture
+    }));
+
+    let audioContext = null;
+    function initializeAudio() {
+      if (audioContext) {
+        if (audioContext.state === 'suspended') audioContext.resume().catch(() => {});
+        return;
+      }
+      const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextConstructor) return;
+      audioContext = new AudioContextConstructor();
+    }
+
+    function playTick() {
+      if (!audioContext || audioBudget <= 0) return;
+      audioBudget--;
+      const now = audioContext.currentTime;
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      const semitone = Math.min(comboCount, 36);
+      oscillator.type = 'triangle';
+      oscillator.frequency.setValueAtTime(250 * Math.pow(2, semitone / 12), now);
+      gain.gain.setValueAtTime(.035, now);
+      gain.gain.exponentialRampToValueAtTime(.0004, now + .075);
+      oscillator.connect(gain).connect(audioContext.destination);
+      oscillator.start(now);
+      oscillator.stop(now + .08);
+    }
+
+    function playPop(large = false) {
+      if (!audioContext) return;
+      const now = audioContext.currentTime;
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      oscillator.type = 'sawtooth';
+      oscillator.frequency.setValueAtTime(large ? 180 : 430, now);
+      oscillator.frequency.exponentialRampToValueAtTime(large ? 48 : 125, now + .18);
+      gain.gain.setValueAtTime(large ? .055 : .045, now);
+      gain.gain.exponentialRampToValueAtTime(.0005, now + .2);
+      oscillator.connect(gain).connect(audioContext.destination);
+      oscillator.start(now);
+      oscillator.stop(now + .21);
+    }
+
+    function playBurst() {
+      if (!audioContext) return;
+      const now = audioContext.currentTime;
+      const frames = Math.floor(audioContext.sampleRate * .45);
+      const buffer = audioContext.createBuffer(1, frames, audioContext.sampleRate);
+      const channel = buffer.getChannelData(0);
+      for (let index = 0; index < frames; index++) {
+        channel[index] = (Math.random() * 2 - 1) * Math.pow(1 - index / frames, 2.1);
+      }
+      const source = audioContext.createBufferSource();
+      const filter = audioContext.createBiquadFilter();
+      const gain = audioContext.createGain();
+      source.buffer = buffer;
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(1600, now);
+      filter.frequency.exponentialRampToValueAtTime(180, now + .4);
+      gain.gain.setValueAtTime(.1, now);
+      gain.gain.exponentialRampToValueAtTime(.0006, now + .45);
+      source.connect(filter).connect(gain).connect(audioContext.destination);
+      source.start(now);
+    }
+
+    function formatNumber(value) {
+      if (value < 1000) return String(Math.floor(value));
+      const units = [
+        ['Qi', 1e18], ['Qa', 1e15], ['T', 1e12], ['B', 1e9], ['M', 1e6], ['K', 1e3]
+      ];
+      for (const [suffix, unit] of units) {
+        if (value >= unit) return (value / unit).toFixed(2) + suffix;
+      }
+      return value.toExponential(2).replace('e+', 'e');
+    }
+
+    function addScore(amount, position = null, showPopup = true) {
+      if (!(amount > 0)) return;
+      score += amount;
+      totalEarned += amount;
+      counterPulse = Math.min(1, counterPulse + Math.min(.65, amount / Math.max(1, score) * 8));
+      if (amount > score * .004 || amount > 1000) shake = Math.min(1.3, shake + .08);
+      if (showPopup && position) spawnPopup(position, amount);
+      checkMilestones();
+    }
+
+    function checkMilestones() {
+      if (score < nextMilestone) return;
+      let crossed = false;
+      while (score >= nextMilestone) {
+        crossed = true;
+        const bonus = score * .1;
+        score += bonus;
+        totalEarned += bonus;
+        milestoneCount++;
+        nextMilestone *= 10;
+      }
+      if (crossed) milestoneExplosion();
+    }
+
+    const rings = [];
+    function milestoneExplosion() {
+      flash = 1;
+      shake = Math.min(1.8, shake + 1.1);
+      digitPulse = 1;
+      playBurst();
+      if ('vibrate' in navigator) navigator.vibrate(28);
+      for (const ball of balls) {
+        ball.body.wakeUp();
+        ball.body.velocity.set((Math.random() - .5) * 5, 13 + Math.random() * 6, (Math.random() - .5) * 5);
+        ball.body.angularVelocity.set((Math.random() - .5) * 8, (Math.random() - .5) * 8, (Math.random() - .5) * 8);
+        spawnSparks(ball.mesh.position, 5, ball.material.color);
+      }
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(.65, .9, 72),
+        new THREE.MeshBasicMaterial({
+          color: 0x9ff6ff,
+          transparent: true,
+          opacity: .9,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          side: THREE.DoubleSide
+        })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = .12;
+      scene.add(ring);
+      rings.push({ mesh: ring, life: 1 });
+    }
+
+    // 成長式（コメント指定どおり）:
+    // baseValue = 8 × 1.035^タップバースト数 × 1.10^マイルストーン数
+    //             × (1 + log10(総獲得量 + 1) / 5)
+    // gain = baseValue × (現在半径 / 生成時半径)^3 × コンボ倍率
+    // cap pop時は gainの累積値をさらに一括でカウントへ流す。
+    function baseValue() {
+      return 8 *
+        Math.pow(1.035, spawnCount) *
+        Math.pow(1.10, milestoneCount) *
+        (1 + Math.log10(totalEarned + 1) / 5);
+    }
+
+    function currentGain(ball) {
+      return baseValue() * Math.pow(ball.radius / ball.spawnRadius, 3) * Math.max(1, comboCount);
+    }
+
+    function makePopupTexture() {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 96;
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+      }));
+      return { canvas, texture, sprite };
+    }
+
+    for (let index = 0; index < MAX_POPUPS; index++) {
+      const popup = makePopupTexture();
+      popup.sprite.visible = false;
+      popup.sprite.center.set(.5, .5);
+      scene.add(popup.sprite);
+      popups.push({ ...popup, life: 0, velocity: new THREE.Vector3() });
+    }
+
+    function spawnPopup(position, amount) {
+      const popup = popups.find(item => item.life <= 0);
+      if (!popup) return;
+      const context = popup.canvas.getContext('2d');
+      context.clearRect(0, 0, 256, 96);
+      context.font = '900 48px system-ui, sans-serif';
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.shadowColor = 'rgba(120,235,255,.95)';
+      context.shadowBlur = 18;
+      context.fillStyle = '#ffffff';
+      context.fillText('+' + formatNumber(amount), 128, 50);
+      popup.texture.needsUpdate = true;
+      popup.sprite.position.copy(position);
+      popup.sprite.scale.set(1.45, .55, 1);
+      popup.sprite.material.opacity = 1;
+      popup.sprite.visible = true;
+      popup.velocity.set((Math.random() - .5) * .45, 1.5 + Math.random() * .65, (Math.random() - .5) * .35);
+      popup.life = 1;
+    }
+
+    const sparkGeometry = new THREE.BufferGeometry();
+    const sparkPositions = new Float32Array(MAX_SPARKS * 3);
+    const sparkColors = new Float32Array(MAX_SPARKS * 3);
+    sparkGeometry.setAttribute('position', new THREE.BufferAttribute(sparkPositions, 3));
+    sparkGeometry.setAttribute('color', new THREE.BufferAttribute(sparkColors, 3));
+    const sparkPoints = new THREE.Points(sparkGeometry, new THREE.PointsMaterial({
+      size: .075,
+      vertexColors: true,
+      transparent: true,
+      opacity: .9,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    }));
+    sparkPoints.frustumCulled = false;
+    scene.add(sparkPoints);
+    for (let index = 0; index < MAX_SPARKS; index++) {
+      sparks.push({ active: false, life: 0, velocity: new THREE.Vector3(), color: new THREE.Color() });
+      sparkPositions[index * 3 + 1] = -100;
+    }
+
+    function spawnSparks(position, count, color) {
+      for (let index = 0; index < MAX_SPARKS && count > 0; index++) {
+        const spark = sparks[index];
+        if (spark.active) continue;
+        spark.active = true;
+        spark.life = 1;
+        spark.color.copy(color);
+        spark.velocity.set((Math.random() - .5) * 5, Math.random() * 4 + .5, (Math.random() - .5) * 5);
+        sparkPositions[index * 3] = position.x;
+        sparkPositions[index * 3 + 1] = position.y;
+        sparkPositions[index * 3 + 2] = position.z;
+        count--;
+      }
+      sparkGeometry.attributes.position.needsUpdate = true;
+    }
+
+    function smallestBall() {
+      return balls.reduce((smallest, ball) => {
+        if (!smallest) return ball;
+        return ball.radius < smallest.radius || (ball.radius === smallest.radius && ball.id < smallest.id) ? ball : smallest;
+      }, null);
+    }
+
+    function popBall(ball) {
+      const gain = ball.storedValue;
+      const position = ball.mesh.position.clone();
+      world.removeBody(ball.body);
+      ball.body.removeEventListener('collide', ball.collisionHandler);
+      scene.remove(ball.mesh);
+      scene.remove(ball.shadow);
+      balls.splice(balls.indexOf(ball), 1);
+      spawnSparks(position, 16, ball.material.color);
+      if (gain > 0) {
+        addScore(gain, position, true);
+        shake = Math.min(1, shake + .12);
+      }
+      playPop(gain > score * .01);
+    }
+
+    function createBall(x, y, z, materialIndex) {
+      while (balls.length >= MAX_BALLS) {
+        const ball = smallestBall();
+        if (!ball) break;
+        popBall(ball);
+      }
+
+      const radius = .15 + Math.random() * .05;
+      const body = new CANNON.Body({
+        mass: 1,
+        material: physicsMaterial,
+        shape: new CANNON.Sphere(radius),
+        position: new CANNON.Vec3(x, y, z),
+        linearDamping: .02,
+        angularDamping: .15,
+        sleepSpeedLimit: .35,
+        sleepTimeLimit: .8
+      });
+      body.velocity.set((Math.random() - .5) * 2.2, -5.5 - Math.random() * 2.5, (Math.random() - .5) * 2.2);
+      body.angularVelocity.set((Math.random() - .5) * 5, (Math.random() - .5) * 5, (Math.random() - .5) * 5);
+
+      const material = palette[materialIndex % palette.length];
+      const mesh = new THREE.Mesh(ballGeometry, material);
+      mesh.scale.setScalar(radius);
+      const glow = new THREE.Sprite(glowMaterial);
+      glow.scale.setScalar(2.5);
+      mesh.add(glow);
+      scene.add(mesh);
+
+      const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
+      shadow.rotation.x = -Math.PI / 2;
+      scene.add(shadow);
+
+      const ball = {
+        id: ++ballSerial,
+        body,
+        mesh,
+        shadow,
+        material,
+        radius,
+        spawnRadius: radius,
+        storedValue: 0,
+        lastCollision: 0,
+        collisionHandler: null
+      };
+
+      ball.collisionHandler = event => {
+        const now = performance.now();
+        const other = event.body;
+        if (other !== groundBody && other.userData && other.userData.id < ball.id) return;
+        if (now - ball.lastCollision < 90) return;
+        const impact = Math.abs(event.contact.getImpactVelocityAlongNormal());
+        if (impact < 1.05) return;
+
+        ball.lastCollision = now;
+        if (now - lastCollisionAt <= COMBO_WINDOW) comboCount++;
+        else comboCount = 1;
+        lastCollisionAt = now;
+
+        const gain = currentGain(ball);
+        ball.storedValue += gain;
+        const contactPoint = ball.mesh.position.clone();
+        contactPoint.y = Math.max(.12, contactPoint.y - ball.radius * .4);
+        addScore(gain, contactPoint, true);
+        spawnSparks(contactPoint, 4, ball.material.color);
+        playTick();
+      };
+      body.addEventListener('collide', ball.collisionHandler);
+      body.userData = { id: ball.id };
+      world.addBody(body);
+      balls.push(ball);
+    }
+
+    function spawnBurst(clientX, clientY) {
+      spawnCount++;
+      const normalizedX = (clientX / window.innerWidth) * 2 - 1;
+      const normalizedY = -(clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(new THREE.Vector2(normalizedX, normalizedY), camera);
+      const direction = raycaster.ray.direction;
+      const denominator = direction.y;
+      let targetX = normalizedX * 3.5;
+      let targetZ = 2.2;
+      if (Math.abs(denominator) > 1e-5) {
+        const distance = -raycaster.ray.origin.y / denominator;
+        if (distance > 0) {
+          targetX = raycaster.ray.origin.x + direction.x * distance;
+          targetZ = raycaster.ray.origin.z + direction.z * distance;
+        }
+      }
+      targetX = THREE.MathUtils.clamp(targetX, -5, 5);
+      targetZ = THREE.MathUtils.clamp(targetZ, -2.5, 5.5);
+
+      const count = 8 + Math.floor(Math.random() * 8);
+      for (let index = 0; index < count; index++) {
+        createBall(
+          targetX + (Math.random() - .5) * 1.5,
+          5.4 + Math.random() * 1.4,
+          targetZ + (Math.random() - .5) * 1.5,
+          Math.floor(Math.random() * palette.length)
+        );
+      }
+    }
+
+    function updateBalls(deltaTime) {
+      for (let index = balls.length - 1; index >= 0; index--) {
+        const ball = balls[index];
+        if (ball.body.position.y < -15) {
+          popBall(ball);
+          continue;
+        }
+
+        if (ball.radius < .82) {
+          ball.radius = Math.min(.82, ball.radius + deltaTime * .024);
+          ball.body.shapes[0].radius = ball.radius;
+          ball.body.shapes[0].updateBoundingSphereRadius();
+          ball.body.updateBoundingRadius();
+          ball.body.wakeUp();
+        }
+
+        ball.mesh.position.copy(ball.body.position);
+        ball.mesh.quaternion.copy(ball.body.quaternion);
+        ball.mesh.scale.setScalar(ball.radius);
+
+        const height = Math.max(0, ball.mesh.position.y - ball.radius);
+        const spread = 1 + height * .13;
+        ball.shadow.position.set(ball.mesh.position.x, .016, ball.mesh.position.z);
+        ball.shadow.scale.set(ball.radius * 2.4 * spread, ball.radius * 2.4 * spread, 1);
+      }
+    }
+
+    function updateEffects(deltaTime) {
+      audioBudget = 18;
+      counterPulse = Math.max(0, counterPulse - deltaTime * 4.2);
+      digitPulse = Math.max(0, digitPulse - deltaTime * 1.8);
+      shake = Math.max(0, shake - deltaTime * 2.2);
+      flash = Math.max(0, flash - deltaTime * 2.8);
+      flashElement.style.opacity = String(flash * .85);
+
+      const counterText = formatNumber(score);
+      if (counterText !== lastCounterText) {
+        if (counterText.length > lastCounterText.length) digitPulse = 1;
+        counterElement.textContent = counterText;
+        lastCounterText = counterText;
+      }
+      const scale = 1 + counterPulse * .055 + digitPulse * .09;
+      counterWrap.style.transform = `translateX(-50%) scale(${scale.toFixed(4)})`;
+
+      if (comboCount > 1 && performance.now() - lastCollisionAt <= COMBO_WINDOW) {
+        comboElement.textContent = `×${comboCount}`;
+        comboElement.style.opacity = '1';
+      } else {
+        comboElement.style.opacity = '0';
+        if (performance.now() - lastCollisionAt > COMBO_WINDOW) comboCount = 0;
+      }
+
+      for (let index = popups.length - 1; index >= 0; index--) {
+        const popup = popups[index];
+        if (popup.life <= 0) continue;
+        popup.life -= deltaTime * .9;
+        popup.sprite.position.addScaledVector(popup.velocity, deltaTime);
+        popup.sprite.material.opacity = Math.max(0, popup.life);
+        if (popup.life <= 0) popup.sprite.visible = false;
+      }
+
+      for (let index = 0; index < MAX_SPARKS; index++) {
+        const spark = sparks[index];
+        if (!spark.active) continue;
+        spark.life -= deltaTime * 2.2;
+        spark.velocity.y -= deltaTime * 5.2;
+        sparkPositions[index * 3] += spark.velocity.x * deltaTime;
+        sparkPositions[index * 3 + 1] += spark.velocity.y * deltaTime;
+        sparkPositions[index * 3 + 2] += spark.velocity.z * deltaTime;
+        const fade = Math.max(0, spark.life);
+        sparkColors[index * 3] = spark.color.r * fade;
+        sparkColors[index * 3 + 1] = spark.color.g * fade;
+        sparkColors[index * 3 + 2] = spark.color.b * fade;
+        if (spark.life <= 0) {
+          spark.active = false;
+          sparkPositions[index * 3 + 1] = -100;
+        }
+      }
+      sparkGeometry.attributes.position.needsUpdate = true;
+      sparkGeometry.attributes.color.needsUpdate = true;
+
+      for (let index = rings.length - 1; index >= 0; index--) {
+        const ring = rings[index];
+        ring.life -= deltaTime * .9;
+        const progress = 1 - ring.life;
+        ring.mesh.scale.setScalar(1 + progress * 20);
+        ring.mesh.material.opacity = Math.max(0, ring.life * .9);
+        if (ring.life <= 0) {
+          scene.remove(ring.mesh);
+          ring.mesh.geometry.dispose();
+          ring.mesh.material.dispose();
+          rings.splice(index, 1);
+        }
+      }
+    }
+
+    function updateCamera(deltaTime) {
+      const parallaxX = pointerX * .55;
+      const parallaxY = pointerY * .3;
+      camera.position.x += ((cameraBase.x + parallaxX) - camera.position.x) * Math.min(1, deltaTime * 3.5);
+      camera.position.y += ((cameraBase.y + parallaxY) - camera.position.y) * Math.min(1, deltaTime * 3.5);
+      camera.position.z = cameraBase.z;
+      if (shake > .001) {
+        camera.position.x += (Math.random() - .5) * shake * .28;
+        camera.position.y += (Math.random() - .5) * shake * .24;
+      }
+      camera.lookAt(cameraTarget);
+    }
+
+    const spawnPointerX = window.innerWidth / 2;
+    const spawnPointerY = window.innerHeight / 2;
+
+    function handlePressStart(event) {
+      if (pressed) return;
+      event.preventDefault();
+      initializeAudio();
+      pressed = true;
+      activePointerId = event.pointerId;
+      spawnPointerX = event.clientX;
+      spawnPointerY = event.clientY;
+      lastSpawnAt = performance.now();
+      spawnBurst(event.clientX, event.clientY);
+    }
+
+    window.addEventListener('pointerdown', handlePressStart, { passive: false });
+    window.addEventListener('pointermove', event => {
+      pointerX = (event.clientX / window.innerWidth) * 2 - 1;
+      pointerY = -((event.clientY / window.innerHeight) * 2 - 1);
+      if (pressed && event.pointerId === activePointerId) {
+        spawnPointerX = event.clientX;
+        spawnPointerY = event.clientY;
+      }
+    }, { passive: true });
+
+    function releasePointer() {
+      pressed = false;
+      activePointerId = null;
+    }
+    window.addEventListener('pointerup', releasePointer);
+    window.addEventListener('pointercancel', releasePointer);
+    window.addEventListener('blur', releasePointer);
+    window.addEventListener('contextmenu', event => event.preventDefault());
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const deltaTime = Math.min(clock.getDelta(), .05);
+      const now = performance.now();
+
+      if (pressed && now - lastSpawnAt >= HOLD_INTERVAL) {
+        lastSpawnAt = now;
+        spawnBurst(spawnPointerX, spawnPointerY);
+      }
+
+      world.step(1 / 60, deltaTime, 5);
+      updateBalls(deltaTime);
+      updateEffects(deltaTime);
+      updateCamera(deltaTime);
+      renderer.render(scene, camera);
+    }
+
+    animate();
+  </script>
+</body>
+</html>

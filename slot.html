@@ -1,0 +1,1101 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07070d">
+  <title>DOPAMINE SLOT</title>
+  <style>
+    :root {
+      --gold: #ffd54a;
+      --gold-deep: #b8860b;
+      --neon: #49f2ff;
+      --pink: #ff45a8;
+      --green: #66ff9e;
+      --bg: #07070d;
+      --panel: rgba(20, 15, 35, .86);
+      --line: rgba(255, 213, 74, .28);
+      --text: #f7f3ff;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; overflow: hidden; }
+    body {
+      min-height: 100vh;
+      min-height: 100dvh;
+      background:
+        radial-gradient(circle at 15% 0%, rgba(73,242,255,.16), transparent 34%),
+        radial-gradient(circle at 90% 15%, rgba(255,69,168,.16), transparent 36%),
+        radial-gradient(circle at 50% 110%, rgba(255,213,74,.15), transparent 38%),
+        var(--bg);
+      color: var(--text);
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #game {
+      position: relative;
+      z-index: 0;
+      height: 100vh;
+      height: 100dvh;
+      width: 100%;
+      max-width: 520px;
+      margin: 0 auto;
+      padding: max(8px, env(safe-area-inset-top)) 10px max(8px, env(safe-area-inset-bottom));
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto auto;
+      gap: 7px;
+      overflow: hidden;
+      touch-action: manipulation;
+    }
+
+    .hud {
+      display: grid;
+      gap: 6px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: linear-gradient(160deg, rgba(35,20,55,.92), rgba(10,10,20,.88));
+      box-shadow: 0 0 18px rgba(255,213,74,.09), inset 0 1px 0 rgba(255,255,255,.06);
+    }
+
+    .brand {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .16em;
+      color: var(--gold);
+      text-shadow: 0 0 12px rgba(255,213,74,.55);
+    }
+
+    .brand span:last-child { color: var(--neon); }
+    .primary {
+      display: grid;
+      grid-template-columns: 1.25fr .7fr .7fr;
+      gap: 5px;
+    }
+
+    .value-box {
+      min-width: 0;
+      padding: 5px 7px;
+      border-radius: 10px;
+      background: rgba(0,0,0,.34);
+      border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .label {
+      display: block;
+      font-size: 8px;
+      line-height: 1.2;
+      letter-spacing: .11em;
+      color: rgba(247,243,255,.61);
+    }
+
+    .value {
+      display: block;
+      font-size: clamp(16px, 5vw, 23px);
+      line-height: 1.15;
+      font-weight: 900;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #credit { color: var(--gold); }
+    #payout { color: var(--green); }
+    .secondary {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr .8fr;
+      gap: 5px;
+    }
+
+    .mode-line {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+      gap: 6px;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .gauge {
+      position: relative;
+      height: 14px;
+      border-radius: 999px;
+      background: rgba(0,0,0,.55);
+      border: 1px solid rgba(255,255,255,.12);
+      overflow: hidden;
+    }
+
+    #gaugeFill {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #49f2ff, #ffd54a, #ff45a8);
+      box-shadow: 0 0 12px rgba(255,69,168,.75);
+      transition: width .25s ease;
+    }
+
+    .gauge.full #gaugeFill { animation: gauge-pulse .55s infinite alternate; }
+    @keyframes gauge-pulse { to { filter: brightness(1.7); } }
+    .pill {
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 9px;
+      white-space: nowrap;
+      border: 1px solid rgba(255,255,255,.13);
+      background: rgba(255,255,255,.05);
+    }
+
+    .pill.active { color: #100; border-color: var(--gold); background: linear-gradient(90deg, var(--gold), #ff9d3c); }
+    .pill.fever { color: #100; border-color: #fff; background: linear-gradient(90deg, #ff45a8, #ffd54a, #49f2ff); }
+
+    .reel-zone {
+      min-height: 0;
+      display: grid;
+      place-items: center;
+    }
+
+    #reelPanel {
+      position: relative;
+      width: min(100%, 385px);
+      padding: 11px;
+      border-radius: 20px;
+      background: linear-gradient(170deg, #33204c, #0a0a15 58%, #241636);
+      border: 2px solid rgba(255,213,74,.58);
+      box-shadow: 0 0 22px rgba(73,242,255,.12), inset 0 0 20px rgba(0,0,0,.7);
+    }
+
+    #reelPanel.reach {
+      border-color: var(--neon);
+      box-shadow: 0 0 28px rgba(73,242,255,.7), inset 0 0 24px rgba(73,242,255,.18);
+      animation: reach-glow .45s infinite alternate;
+    }
+
+    @keyframes reach-glow {
+      from { box-shadow: 0 0 18px rgba(73,242,255,.45), inset 0 0 18px rgba(73,242,255,.12); }
+      to { box-shadow: 0 0 38px rgba(255,69,168,.85), inset 0 0 28px rgba(255,213,74,.22); }
+    }
+
+    .reels {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+    }
+
+    .reel {
+      position: relative;
+      height: 152px;
+      overflow: hidden;
+      border-radius: 13px;
+      background: linear-gradient(180deg, #111, #eee 47%, #111);
+      border: 2px solid rgba(255,255,255,.18);
+      box-shadow: inset 0 12px 18px rgba(0,0,0,.8), inset 0 -12px 18px rgba(0,0,0,.8);
+    }
+
+    .reel-track {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      grid-template-rows: repeat(3, 1fr);
+    }
+
+    .reel.spinning .reel-track { filter: blur(1.3px); }
+    .reel.slow .reel-track { filter: blur(.5px); opacity: .95; }
+    .symbol {
+      display: grid;
+      place-items: center;
+      font-size: 35px;
+      font-weight: 900;
+      line-height: 1;
+      color: #101018;
+      text-shadow: 0 1px 0 rgba(255,255,255,.65);
+    }
+
+    .symbol.rp { font-size: 19px; color: #d60000; letter-spacing: -.05em; }
+    .symbol.seven { color: #d00000; }
+    .symbol.bar { font-size: 18px; color: #101018; }
+    .reel.stopped .symbol:nth-child(2) { animation: symbol-pop .22s ease-out; }
+    @keyframes symbol-pop { 50% { transform: scale(1.17); } }
+
+    .payline {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      top: 50%;
+      height: 3px;
+      transform: translateY(-1.5px);
+      background: linear-gradient(90deg, transparent, var(--gold), transparent);
+      box-shadow: 0 0 12px rgba(255,213,74,.8);
+      pointer-events: none;
+      z-index: 3;
+    }
+
+    #reachBadge {
+      position: absolute;
+      z-index: 4;
+      left: 50%;
+      top: 5px;
+      transform: translateX(-50%) scale(0);
+      padding: 3px 12px;
+      border-radius: 999px;
+      color: #02020a;
+      font-size: 14px;
+      font-weight: 1000;
+      letter-spacing: .12em;
+      background: linear-gradient(90deg, var(--neon), #fff, var(--pink));
+      transition: transform .18s ease;
+    }
+
+    #reachBadge.show { transform: translateX(-50%) scale(1); animation: reach-badge .38s infinite alternate; }
+    @keyframes reach-badge { to { filter: brightness(1.45); } }
+    #eventText {
+      min-height: 20px;
+      margin-top: 7px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 900;
+      color: var(--gold);
+      text-shadow: 0 0 10px rgba(255,213,74,.6);
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 5px;
+    }
+
+    .stat {
+      min-width: 0;
+      padding: 4px 3px;
+      text-align: center;
+      border-radius: 9px;
+      background: rgba(255,255,255,.045);
+      border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .stat b {
+      display: block;
+      font-size: 12px;
+      line-height: 1.25;
+    }
+
+    .stat span { font-size: 7.5px; color: rgba(247,243,255,.58); letter-spacing: .08em; }
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1.35fr;
+      gap: 7px;
+      align-items: center;
+    }
+
+    button {
+      border: 0;
+      color: #fff;
+      font: 800 12px/1.2 inherit;
+      border-radius: 14px;
+      padding: 10px 6px;
+      cursor: pointer;
+      transition: transform .08s ease, filter .15s ease;
+    }
+
+    button:active { transform: scale(.96); }
+    button:disabled { opacity: .45; cursor: default; }
+    .charge {
+      min-height: 46px;
+      background: linear-gradient(170deg, #48d47b, #158f4b);
+      box-shadow: 0 6px 0 #0b5e32;
+    }
+
+    .auto {
+      min-height: 46px;
+      background: linear-gradient(170deg, #3f4d75, #222b48);
+      border: 1px solid rgba(255,255,255,.16);
+      box-shadow: 0 6px 0 #141a2b;
+    }
+
+    .auto.on {
+      color: #08080f;
+      background: linear-gradient(170deg, var(--neon), #1a8ea8);
+      box-shadow: 0 6px 0 #0e5e72;
+    }
+
+    #spinButton {
+      min-height: 71px;
+      border-radius: 999px;
+      font-size: 18px;
+      font-weight: 1000;
+      letter-spacing: .08em;
+      background: radial-gradient(circle at 35% 25%, #fff1a3, #ffcc26 42%, #d59400);
+      color: #221500;
+      border: 3px solid #fff6c9;
+      box-shadow: 0 8px 0 #8a5a00, 0 0 28px rgba(255,213,74,.45);
+    }
+
+    #spinButton.spinning {
+      background: radial-gradient(circle at 35% 25%, #ffb3d8, #ff45a8 45%, #a60058);
+      color: #fff;
+      border-color: #ffd9ec;
+      box-shadow: 0 8px 0 #6c0039, 0 0 28px rgba(255,69,168,.45);
+    }
+
+    .mute {
+      position: absolute;
+      right: 7px;
+      top: 7px;
+      z-index: 5;
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      font-size: 17px;
+      border-radius: 50%;
+      background: rgba(0,0,0,.5);
+      border: 1px solid rgba(255,255,255,.16);
+      box-shadow: none;
+    }
+
+    #game.fever::after {
+      content: "";
+      position: absolute;
+      inset: -30px;
+      z-index: -1;
+      background: conic-gradient(from 0deg, #ff45a8, #ffd54a, #66ff9e, #49f2ff, #9d5bff, #ff45a8);
+      filter: blur(32px);
+      opacity: .24;
+      animation: fever-turn 2.2s linear infinite;
+      pointer-events: none;
+    }
+
+    @keyframes fever-turn { to { transform: rotate(1turn); } }
+    #game.shake { animation: game-shake .42s ease; }
+    @keyframes game-shake {
+      10%, 50%, 90% { transform: translate(-5px, 3px) rotate(-.35deg); }
+      30%, 70% { transform: translate(5px, -4px) rotate(.35deg); }
+    }
+
+    #fx {
+      position: fixed;
+      inset: 0;
+      z-index: 70;
+      pointer-events: none;
+      background: rgba(0,0,0,.86);
+      opacity: 0;
+      transition: opacity .16s ease;
+    }
+
+    #fx.dark { opacity: 1; }
+    #fx.flash { animation: fx-flash .5s ease-out; }
+    @keyframes fx-flash {
+      0% { background: #fff; opacity: 1; }
+      100% { background: rgba(0,0,0,.86); opacity: 1; }
+    }
+
+    #announce {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      z-index: 75;
+      transform: translate(-50%, -50%) scale(.8);
+      width: 78%;
+      max-width: 350px;
+      padding: 18px 14px;
+      border-radius: 20px;
+      text-align: center;
+      color: #210f00;
+      font-size: 27px;
+      font-weight: 1000;
+      letter-spacing: .05em;
+      background: linear-gradient(160deg, #fff6c9, #ffd54a, #ff9d3c);
+      border: 4px solid #fff;
+      box-shadow: 0 0 45px rgba(255,213,74,.85);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .16s ease, transform .16s ease;
+    }
+
+    #announce.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    #announce small { display: block; margin-top: 5px; font-size: 12px; }
+    #particles { position: fixed; inset: 0; z-index: 68; pointer-events: none; }
+    .particle {
+      position: absolute;
+      left: 50%;
+      top: 43%;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 32% 30%, #fff, #ffd54a 48%, #8a5a00);
+      box-shadow: 0 0 10px rgba(255,213,74,.8);
+      animation: particle-fly .9s ease-out forwards;
+    }
+
+    @keyframes particle-fly {
+      to { transform: translate(var(--dx), var(--dy)) scale(.25) rotate(220deg); opacity: 0; }
+    }
+
+    @media (max-width: 370px) {
+      .reel { height: 136px; }
+      .symbol { font-size: 30px; }
+      .symbol.bar { font-size: 16px; }
+      #spinButton { min-height: 64px; font-size: 16px; }
+    }
+
+    @media (max-height: 700px) {
+      #game { gap: 5px; }
+      .hud { padding: 6px; }
+      .reel { height: 128px; }
+      .symbol { font-size: 28px; }
+      #spinButton { min-height: 60px; }
+      .charge, .auto { min-height: 42px; }
+      .stat b { font-size: 11px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="game">
+    <button id="muteButton" class="mute" type="button" aria-label="サウンド切替">🔊</button>
+    <header class="hud" aria-label="ゲーム状態">
+      <div class="brand"><span>DOPAMINE SLOT</span><span>NON-STOP</span></div>
+      <div class="primary">
+        <div class="value-box"><span class="label">CREDIT</span><span class="value" id="credit">100</span></div>
+        <div class="value-box"><span class="label">BET</span><span class="value" id="bet">3</span></div>
+        <div class="value-box"><span class="label">PAYOUT</span><span class="value" id="payout">0</span></div>
+      </div>
+      <div class="secondary">
+        <div class="value-box"><span class="label">LEVEL</span><span class="value" id="level">Lv1 新米</span></div>
+        <div class="value-box"><span class="label">COMBO</span><span class="value" id="combo">×1</span></div>
+        <div class="value-box"><span class="label">WIN RATE</span><span class="value" id="winRate">0%</span></div>
+      </div>
+      <div class="mode-line">
+        <div class="gauge" id="gauge"><div id="gaugeFill"></div></div>
+        <div class="pill" id="bonusPill">BONUS 0G</div>
+        <div class="pill" id="feverPill">FEVER 0G</div>
+      </div>
+    </header>
+
+    <main class="reel-zone">
+      <section id="reelPanel" aria-label="リール">
+        <div class="reels">
+          <div class="reel" id="reel0"><div class="reel-track" id="track0"></div></div>
+          <div class="reel" id="reel1"><div class="reel-track" id="track1"></div></div>
+          <div class="reel" id="reel2"><div class="reel-track" id="track2"></div></div>
+        </div>
+        <div class="payline"></div>
+        <div id="reachBadge">REACH!</div>
+      </section>
+    </main>
+    <div id="eventText" aria-live="polite">BET 3でスタート！</div>
+
+    <section class="stats" aria-label="統計">
+      <div class="stat"><b id="totalSpins">0</b><span>SPINS</span></div>
+      <div class="stat"><b id="bonusCount">0</b><span>BONUS</span></div>
+      <div class="stat"><b id="maxCombo">0</b><span>MAX CHAIN</span></div>
+      <div class="stat"><b id="maxWin">0</b><span>MAX WIN</span></div>
+    </section>
+
+    <footer class="controls">
+      <button id="chargeButton" class="charge" type="button">+100</button>
+      <button id="autoButton" class="auto" type="button">AUTO</button>
+      <button id="spinButton" type="button">SPIN</button>
+    </footer>
+  </div>
+
+  <div id="particles"></div>
+  <div id="fx"></div>
+  <div id="announce"></div>
+
+  <script>
+    "use strict";
+
+    const SYMBOLS = ["7", "BAR", "⭐", "🍉", "🔔", "🍒", "RP"];
+    const SYMBOL_CLASS = { "7": "seven", "BAR": "bar", "RP": "rp" };
+
+    /*
+      通常時の設計値（1000分率）
+      7=0.6%, BAR=0.4%, ⭐=1.8%, 🍉=3.0%, 🔔=4.5%,
+      🍒=10.5%, RP=12.0%, ハズレ=67.2%
+      何かしらの当選=32.8%（約1/3）、ボーナス=1.0%（約1/100）
+    */
+    const STANDARD_OUTCOMES = [
+      { key: "seven", weight: 6 },
+      { key: "bar", weight: 4 },
+      { key: "star", weight: 18 },
+      { key: "melon", weight: 30 },
+      { key: "bell", weight: 45 },
+      { key: "cherry", weight: 105 },
+      { key: "replay", weight: 120 },
+      { key: "lose", weight: 672 }
+    ];
+
+    // ボーナス中は小役以上の当選を50.0%にする。
+    const BONUS_OUTCOMES = [
+      { key: "star", weight: 100 },
+      { key: "melon", weight: 130 },
+      { key: "bell", weight: 160 },
+      { key: "cherry", weight: 110 },
+      { key: "lose", weight: 500 }
+    ];
+
+    // ボーナス中は毎ゲーム上乗せ抽選。12.0%で残りゲーム数が増える。
+    const BONUS_CARRY = [
+      { add: 0, weight: 880 },
+      { add: 1, weight: 70 },
+      { add: 3, weight: 40 },
+      { add: 5, weight: 10 }
+    ];
+
+    const LEVELS = [
+      { exp: 0, level: 1, title: "新米" },
+      { exp: 30, level: 2, title: "常連" },
+      { exp: 80, level: 3, title: "ベテラン" },
+      { exp: 180, level: 4, title: "プロ" },
+      { exp: 350, level: 5, title: "狂師" },
+      { exp: 650, level: 6, title: "神" },
+      { exp: 1100, level: 7, title: "伝説" }
+    ];
+
+    const state = {
+      credit: 100,
+      freeSpin: false,
+      spinning: false,
+      settling: false,
+      freeze: false,
+      fastStop: false,
+      auto: false,
+      autoTimer: null,
+      muted: false,
+      combo: 0,
+      comboMultiplier: 1,
+      gauge: 0,
+      feverGames: 0,
+      bonusGames: 0,
+      bonusKind: null,
+      finalSymbols: ["🍒", "BAR", "🍒"],
+      stopped: [false, false, false],
+      stopTimers: [null, null, null],
+      spinTimer: null,
+      reachActive: false,
+      slipActive: false,
+      stats: { spins: 0, wins: 0, bonuses: 0, maxCombo: 0, maxWin: 0, exp: 0 }
+    };
+
+    const nodes = {
+      game: document.getElementById("game"),
+      credit: document.getElementById("credit"),
+      bet: document.getElementById("bet"),
+      payout: document.getElementById("payout"),
+      level: document.getElementById("level"),
+      combo: document.getElementById("combo"),
+      winRate: document.getElementById("winRate"),
+      gauge: document.getElementById("gauge"),
+      gaugeFill: document.getElementById("gaugeFill"),
+      bonusPill: document.getElementById("bonusPill"),
+      feverPill: document.getElementById("feverPill"),
+      reelPanel: document.getElementById("reelPanel"),
+      reels: [document.getElementById("reel0"), document.getElementById("reel1"), document.getElementById("reel2")],
+      tracks: [document.getElementById("track0"), document.getElementById("track1"), document.getElementById("track2")],
+      reachBadge: document.getElementById("reachBadge"),
+      eventText: document.getElementById("eventText"),
+      totalSpins: document.getElementById("totalSpins"),
+      bonusCount: document.getElementById("bonusCount"),
+      maxCombo: document.getElementById("maxCombo"),
+      maxWin: document.getElementById("maxWin"),
+      charge: document.getElementById("chargeButton"),
+      auto: document.getElementById("autoButton"),
+      spin: document.getElementById("spinButton"),
+      mute: document.getElementById("muteButton"),
+      particles: document.getElementById("particles"),
+      fx: document.getElementById("fx"),
+      announce: document.getElementById("announce")
+    };
+
+    let audioContext = null;
+    let spinInterval = null;
+
+    const randomInteger = (max) => Math.floor(Math.random() * max);
+    const pickWeighted = (items) => {
+      const total = items.reduce((sum, item) => sum + item.weight, 0);
+      let value = Math.random() * total;
+      for (const item of items) {
+        value -= item.weight;
+        if (value < 0) return item;
+      }
+      return items[items.length - 1];
+    };
+
+    const randomSymbol = (exclude = null) => {
+      let symbol = SYMBOLS[randomInteger(SYMBOLS.length)];
+      while (symbol === exclude) symbol = SYMBOLS[randomInteger(SYMBOLS.length)];
+      return symbol;
+    };
+
+    const chooseOutcome = () => pickWeighted(state.bonusGames > 0 ? BONUS_OUTCOMES : STANDARD_OUTCOMES).key;
+
+    const buildSymbols = (outcome) => {
+      if (outcome === "seven") return ["7", "7", "7"];
+      if (outcome === "bar") return ["BAR", "BAR", "BAR"];
+      if (outcome === "star") return ["⭐", "⭐", "⭐"];
+      if (outcome === "melon") return ["🍉", "🍉", "🍉"];
+      if (outcome === "bell") return ["🔔", "🔔", "🔔"];
+      if (outcome === "replay") return ["RP", "RP", "RP"];
+      if (outcome === "cherry") return ["🍒", randomSymbol("🍒"), randomSymbol("🍒")];
+
+      const reachLure = Math.random() < 0.28;
+      if (reachLure) {
+        const near = randomSymbol("🍒");
+        let miss = randomSymbol();
+        while (miss === near) miss = randomSymbol();
+        return [near, near, miss];
+      }
+
+      let symbols;
+      do {
+        symbols = [randomSymbol(), randomSymbol(), randomSymbol()];
+      } while (symbols[0] === "🍒" || (symbols[0] === symbols[1] && symbols[1] === symbols[2]));
+      return symbols;
+    };
+
+    const evaluateLine = (symbols) => {
+      const [left, center, right] = symbols;
+      if (left === "7" && center === "7" && right === "7") return { key: "seven", win: true, payout: 0, label: "7 BONUS" };
+      if (left === "BAR" && center === "BAR" && right === "BAR") return { key: "bar", win: true, payout: 0, label: "BAR BONUS" };
+      if (left === "⭐" && center === "⭐" && right === "⭐") return { key: "star", win: true, payout: 50, label: "STAR" };
+      if (left === "🍉" && center === "🍉" && right === "🍉") return { key: "melon", win: true, payout: 15, label: "MELON" };
+      if (left === "🔔" && center === "🔔" && right === "🔔") return { key: "bell", win: true, payout: 10, label: "BELL" };
+      if (left === "🍒") return { key: "cherry", win: true, payout: 4, label: "CHERRY" };
+      if (left === "RP" && center === "RP" && right === "RP") return { key: "replay", win: true, payout: 0, label: "REPLAY" };
+      return { key: "lose", win: false, payout: 0, label: "" };
+    };
+
+    const renderReel = (index, symbols) => {
+      nodes.tracks[index].replaceChildren(...symbols.map((symbol) => {
+        const element = document.createElement("div");
+        element.className = `symbol ${SYMBOL_CLASS[symbol] || ""}`.trim();
+        element.textContent = symbol;
+        return element;
+      }));
+    };
+
+    const updateSpinningReels = () => {
+      for (let index = 0; index < 3; index += 1) {
+        if (state.stopped[index]) continue;
+        if (state.reachActive && index === 2 && Math.random() < 0.72) {
+          renderReel(2, [randomSymbol(), state.finalSymbols[0], randomSymbol()]);
+        } else {
+          renderReel(index, [randomSymbol(), randomSymbol(), randomSymbol()]);
+        }
+      }
+    };
+
+    const clearTimer = (index) => {
+      if (state.stopTimers[index]) {
+        clearTimeout(state.stopTimers[index]);
+        state.stopTimers[index] = null;
+      }
+    };
+
+    const setStopTimer = (index, delay) => {
+      clearTimer(index);
+      state.stopTimers[index] = setTimeout(() => stopReel(index), delay);
+    };
+
+    const reelNeighbors = (index) => {
+      const center = state.finalSymbols[index];
+      if (state.slipActive && index === 2) {
+        return [state.finalSymbols[0], center, randomSymbol(center)];
+      }
+      return [randomSymbol(center), center, randomSymbol(center)];
+    };
+
+    const stopReel = (index) => {
+      if (!state.spinning || state.stopped[index]) return;
+      state.stopped[index] = true;
+      clearTimer(index);
+      nodes.reels[index].classList.remove("spinning", "slow");
+      nodes.reels[index].classList.add("stopped");
+      renderReel(index, reelNeighbors(index));
+      playStopSound();
+
+      if (index === 0) {
+        setStopTimer(1, state.fastStop ? 140 : 760);
+        return;
+      }
+
+      if (index === 1) {
+        const [left, center] = state.finalSymbols;
+        state.reachActive = left === center && left !== "🍒";
+        if (state.reachActive) {
+          state.slipActive = !evaluateLine(state.finalSymbols).win;
+          nodes.reelPanel.classList.add("reach");
+          nodes.reachBadge.classList.add("show");
+          nodes.reels[2].classList.add("slow");
+          nodes.eventText.textContent = "リーチ！！";
+          playReachSound();
+          clearInterval(spinInterval);
+          spinInterval = setInterval(updateSpinningReels, 210);
+        }
+        const delay = state.fastStop ? 190 : state.reachActive ? 1750 : 820;
+        setStopTimer(2, delay);
+        return;
+      }
+
+      clearInterval(spinInterval);
+      spinInterval = null;
+      state.spinning = false;
+      nodes.spin.classList.remove("spinning");
+      nodes.spin.textContent = "SPIN";
+      nodes.reelPanel.classList.remove("reach");
+      nodes.reachBadge.classList.remove("show");
+      nodes.reels[2].classList.remove("slow");
+      settle();
+    };
+
+    const earlyStop = () => {
+      if (!state.spinning || state.fastStop) return;
+      state.fastStop = true;
+      const next = state.stopped.findIndex((stopped) => !stopped);
+      if (next >= 0) stopReel(next);
+    };
+
+    const startSpin = () => {
+      if (state.freeze || state.spinning || state.settling) return;
+      const freeGame = state.bonusGames > 0 || state.freeSpin;
+      if (!freeGame && state.credit < 3) {
+        stopAuto();
+        nodes.eventText.textContent = "メダル不足！ +100を押して";
+        return;
+      }
+
+      clearAutoTimer();
+      if (!freeGame) state.credit -= 3;
+      state.freeSpin = false;
+      state.spinning = true;
+      state.settling = false;
+      state.fastStop = false;
+      state.reachActive = false;
+      state.slipActive = false;
+      state.stopped = [false, false, false];
+      state.finalSymbols = buildSymbols(chooseOutcome());
+      state.stats.spins += 1;
+      state.stats.exp += 1;
+      if (state.bonusGames > 0) state.bonusGames -= 1;
+
+      nodes.payout.textContent = "0";
+      nodes.eventText.textContent = state.bonusGames > 0 ? "BONUS GAME!" : "GO!";
+      nodes.spin.classList.add("spinning");
+      nodes.spin.textContent = "STOP";
+      nodes.reelPanel.classList.remove("reach");
+      nodes.reachBadge.classList.remove("show");
+      state.stopped.forEach((_, index) => {
+        nodes.reels[index].classList.remove("stopped", "slow");
+        nodes.reels[index].classList.add("spinning");
+      });
+      updateSpinningReels();
+      spinInterval = setInterval(updateSpinningReels, state.reachActive ? 210 : 88);
+      setStopTimer(0, 720);
+      playLeverSound();
+      updateHud();
+    };
+
+    const bonusMultiplier = () => (state.bonusKind === "seven" ? 2 : 1);
+    const comboValue = () => [1, 2, 3, 5][Math.min(state.combo, 3)];
+
+    const addGauge = (amount) => {
+      state.gauge = Math.min(100, state.gauge + amount);
+      if (state.gauge >= 100 && state.feverGames === 0) {
+        state.feverGames = 10;
+        nodes.game.classList.add("fever");
+        nodes.eventText.textContent = "FEVER突入！ 10G払い出し3倍";
+        playFanfare(0.75);
+        vibrate([30, 40, 30]);
+      }
+    };
+
+    const drawBonusCarry = () => {
+      if (!state.bonusKind) return;
+      const add = pickWeighted(BONUS_CARRY).add;
+      if (add > 0) {
+        state.bonusGames += add;
+        nodes.eventText.textContent = `BONUS上乗せ +${add}G！`;
+        playCoinSound(0.5);
+      }
+    };
+
+    const showParticles = (count) => {
+      for (let index = 0; index < count; index += 1) {
+        const particle = document.createElement("div");
+        particle.className = "particle";
+        particle.style.setProperty("--dx", `${-150 + Math.random() * 300}px`);
+        particle.style.setProperty("--dy", `${-230 + Math.random() * 300}px`);
+        particle.style.animationDelay = `${Math.random() * 120}ms`;
+        nodes.particles.append(particle);
+        setTimeout(() => particle.remove(), 1050);
+      }
+    };
+
+    const shakeGame = () => {
+      nodes.game.classList.remove("shake");
+      void nodes.game.offsetWidth;
+      nodes.game.classList.add("shake");
+      setTimeout(() => nodes.game.classList.remove("shake"), 460);
+    };
+
+    const announce = (title, subtitle = "", duration = 900) => {
+      nodes.announce.innerHTML = `${title}<small>${subtitle}</small>`;
+      nodes.announce.classList.add("show");
+      setTimeout(() => nodes.announce.classList.remove("show"), duration);
+    };
+
+    const triggerBonus = (kind) => {
+      state.freeze = true;
+      state.stats.bonuses += 1;
+      addGauge(45);
+      nodes.fx.classList.add("dark");
+      vibrate([60, 70, 180]);
+      setTimeout(() => {
+        nodes.fx.classList.remove("dark");
+        nodes.fx.classList.add("flash");
+        playFanfare(1);
+        const strong = kind === "seven";
+        state.bonusKind = kind;
+        state.bonusGames = 30;
+        announce(strong ? "BIG BONUS！" : "REG BONUS！", strong ? "7揃い・30G・払い出し2倍" : "BAR揃い・30G", 1100);
+        shakeGame();
+        showParticles(34);
+        setTimeout(() => nodes.fx.classList.remove("flash"), 520);
+        setTimeout(() => {
+          state.freeze = false;
+          updateHud();
+          scheduleAuto(1500);
+        }, 1100);
+      }, 430);
+      updateHud();
+    };
+
+    const settle = () => {
+      if (state.settling) return;
+      state.settling = true;
+      const result = evaluateLine(state.finalSymbols);
+      if (result.win) {
+        state.combo += 1;
+        state.comboMultiplier = comboValue();
+        state.stats.wins += 1;
+        state.stats.maxCombo = Math.max(state.stats.maxCombo, state.combo);
+        addGauge(result.key === "replay" ? 12 : 18);
+      } else {
+        state.combo = 0;
+        state.comboMultiplier = 1;
+        if (state.reachActive) addGauge(12);
+      }
+
+      if (state.feverGames > 0) {
+        state.feverGames -= 1;
+        if (state.feverGames === 0) {
+          state.gauge = 0;
+          nodes.game.classList.remove("fever");
+        }
+      }
+
+      if (result.key === "seven" || result.key === "bar") {
+        nodes.eventText.textContent = "扉が開く…！";
+        state.settling = false;
+        triggerBonus(result.key);
+        return;
+      }
+
+      let payout = result.payout;
+      if (payout > 0) {
+        payout *= bonusMultiplier();
+        if (state.feverGames > 0) payout *= 3;
+        payout *= state.comboMultiplier;
+      }
+
+      if (payout > 0) {
+        state.credit += payout;
+        state.stats.maxWin = Math.max(state.stats.maxWin, payout);
+        nodes.payout.textContent = `+${payout}`;
+        nodes.eventText.textContent = `${result.label} ${payout}枚！ ×${state.comboMultiplier}`;
+        playCoinSound(Math.min(1, .35 + payout / 80));
+        showParticles(Math.min(34, 8 + Math.floor(payout / 4)));
+        shakeGame();
+        if (payout >= 50) vibrate([35, 45, 75]);
+      } else if (result.key === "replay") {
+        state.freeSpin = true;
+        nodes.eventText.textContent = "REPLAY！ 次ゲーム無料";
+        playCoinSound(.45);
+      } else {
+        nodes.eventText.textContent = state.slipActive ? "あと1コマ…！" : "残念";
+      }
+
+      drawBonusCarry();
+      if (state.bonusGames === 0 && state.bonusKind) {
+        state.bonusKind = null;
+        nodes.eventText.textContent = "BONUS終了！";
+      }
+      updateHud();
+      state.settling = false;
+      scheduleAuto(result.win ? 1250 : 450);
+    };
+
+    const levelInfo = () => {
+      let current = LEVELS[0];
+      for (const level of LEVELS) if (state.stats.exp >= level.exp) current = level;
+      return current;
+    };
+
+    const updateHud = () => {
+      const level = levelInfo();
+      nodes.credit.textContent = state.credit;
+      nodes.bet.textContent = state.bonusGames > 0 ? "B" : state.freeSpin ? "FREE" : "3";
+      nodes.level.textContent = `Lv${level.level} ${level.title}`;
+      nodes.combo.textContent = `×${state.comboMultiplier}`;
+      nodes.winRate.textContent = state.stats.spins ? `${Math.round(state.stats.wins / state.stats.spins * 100)}%` : "0%";
+      nodes.gaugeFill.style.width = `${state.gauge}%`;
+      nodes.gauge.classList.toggle("full", state.gauge >= 100);
+      nodes.bonusPill.textContent = state.bonusGames > 0 ? `${state.bonusKind === "seven" ? "BIG" : "REG"} ${state.bonusGames}G` : "BONUS 0G";
+      nodes.bonusPill.classList.toggle("active", state.bonusGames > 0);
+      nodes.feverPill.textContent = `FEVER ${state.feverGames}G`;
+      nodes.feverPill.classList.toggle("fever", state.feverGames > 0);
+      nodes.totalSpins.textContent = state.stats.spins;
+      nodes.bonusCount.textContent = state.stats.bonuses;
+      nodes.maxCombo.textContent = state.stats.maxCombo;
+      nodes.maxWin.textContent = state.stats.maxWin;
+    };
+
+    const clearAutoTimer = () => {
+      if (state.autoTimer) {
+        clearTimeout(state.autoTimer);
+        state.autoTimer = null;
+      }
+    };
+
+    const scheduleAuto = (delay) => {
+      clearAutoTimer();
+      if (!state.auto || state.freeze) return;
+      if (state.credit < 3 && state.bonusGames === 0 && !state.freeSpin) {
+        stopAuto();
+        nodes.eventText.textContent = "メダル不足でAUTO停止";
+        return;
+      }
+      state.autoTimer = setTimeout(startSpin, delay);
+    };
+
+    const stopAuto = () => {
+      state.auto = false;
+      nodes.auto.classList.remove("on");
+      clearAutoTimer();
+    };
+
+    const unlockAudio = () => {
+      if (state.muted) return;
+      if (!audioContext) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        audioContext = new AudioContextClass();
+      }
+      if (audioContext.state === "suspended") audioContext.resume();
+    };
+
+    const playTone = (frequency, duration, type = "square", volume = .06, delay = 0) => {
+      if (state.muted || !audioContext) return;
+      const start = audioContext.currentTime + delay;
+      const oscillator = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      oscillator.type = type;
+      oscillator.frequency.setValueAtTime(frequency, start);
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(volume, start + .015);
+      gain.gain.exponentialRampToValueAtTime(.0001, start + duration);
+      oscillator.connect(gain).connect(audioContext.destination);
+      oscillator.start(start);
+      oscillator.stop(start + duration + .02);
+    };
+
+    const playLeverSound = () => {
+      unlockAudio();
+      playTone(72, .16, "sawtooth", .05);
+      playTone(155, .09, "square", .025, .04);
+    };
+
+    const playStopSound = () => {
+      unlockAudio();
+      playTone(215, .07, "square", .04);
+      playTone(95, .07, "triangle", .03);
+    };
+
+    const playReachSound = () => {
+      unlockAudio();
+      [392, 523, 659, 784].forEach((frequency, index) => playTone(frequency, .16, "square", .035, index * .12));
+    };
+
+    const playCoinSound = (intensity = 1) => {
+      unlockAudio();
+      const count = Math.max(3, Math.min(8, Math.round(3 + intensity * 4)));
+      for (let index = 0; index < count; index += 1) {
+        playTone(980 + index * 95, .08, "triangle", .035, index * .07);
+      }
+    };
+
+    const playFanfare = (intensity = 1) => {
+      unlockAudio();
+      const notes = [523, 659, 784, 1046, 1318];
+      notes.forEach((frequency, index) => playTone(frequency, .26, "square", .055 * intensity, index * .13));
+      playTone(1568, .55, "sawtooth", .045 * intensity, notes.length * .13);
+    };
+
+    const vibrate = (pattern) => {
+      if (!state.muted && navigator.vibrate) navigator.vibrate(pattern);
+    };
+
+    nodes.spin.addEventListener("click", () => {
+      if (state.spinning) {
+        earlyStop();
+      } else {
+        startSpin();
+      }
+    });
+
+    nodes.charge.addEventListener("click", () => {
+      if (state.spinning) return;
+      state.credit += 100;
+      nodes.eventText.textContent = "100枚チャージ！";
+      playCoinSound(.7);
+      showParticles(14);
+      updateHud();
+      if (state.auto) scheduleAuto(350);
+    });
+
+    nodes.auto.addEventListener("click", () => {
+      if (state.auto) {
+        stopAuto();
+        nodes.eventText.textContent = "AUTO停止";
+      } else {
+        state.auto = true;
+        nodes.auto.classList.add("on");
+        nodes.eventText.textContent = "AUTO開始";
+        if (!state.spinning && !state.freeze) startSpin();
+      }
+    });
+
+    nodes.mute.addEventListener("click", () => {
+      state.muted = !state.muted;
+      nodes.mute.textContent = state.muted ? "🔇" : "🔊";
+      nodes.mute.setAttribute("aria-label", state.muted ? "サウンドオフ" : "サウンドオン");
+      if (!state.muted) unlockAudio();
+    });
+
+    window.addEventListener("pointerdown", unlockAudio, { passive: true });
+    window.addEventListener("beforeunload", () => {
+      clearInterval(spinInterval);
+      state.stopTimers.forEach(clearTimer);
+      clearAutoTimer();
+    });
+
+    [0, 1, 2].forEach((index) => renderReel(index, [randomSymbol(), randomSymbol(), randomSymbol()]));
+    updateHud();
+  </script>
+</body>
+</html>
