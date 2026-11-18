@@ -94,8 +94,6 @@
     let pressed = false;
     let activePointerId = null;
     let lastSpawnAt = 0;
-    let pointerX = 0;
-    let pointerY = 0;
     let ballSerial = 0;
     let audioBudget = 0;
 
@@ -103,7 +101,6 @@
     const popups = [];
     const sparks = [];
     const clock = new THREE.Clock();
-    const raycaster = new THREE.Raycaster();
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -117,9 +114,9 @@
     scene.background = new THREE.Color(0x030407);
     scene.fog = new THREE.Fog(0x030407, 11, 27);
 
-    const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, .1, 100);
-    const cameraBase = new THREE.Vector3(0, 5.0, 9.2);
-    const cameraTarget = new THREE.Vector3(0, 1.5, -.5);
+    const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, .1, 100);
+    const cameraBase = new THREE.Vector3(0, 5.4, 11.4);
+    const cameraTarget = new THREE.Vector3(0, 1.1, 0);
     camera.position.copy(cameraBase);
     camera.lookAt(cameraTarget);
 
@@ -160,6 +157,37 @@
       friction: .04,
       restitution: .83
     }));
+
+    const arenaFloor = new THREE.Mesh(
+      new THREE.PlaneGeometry(6.8, 4.6),
+      new THREE.MeshStandardMaterial({ color: 0x0b1020, roughness: .74, metalness: .22 })
+    );
+    arenaFloor.rotation.x = -Math.PI / 2;
+    arenaFloor.position.y = .012;
+    scene.add(arenaFloor);
+
+    const wallVisualMaterial = new THREE.MeshBasicMaterial({
+      color: 0x61d7ff,
+      transparent: true,
+      opacity: .09,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+    function addArenaWall(x, z, width, depth) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, 1.5, depth), wallVisualMaterial);
+      mesh.position.set(x, .75, z);
+      scene.add(mesh);
+      world.addBody(new CANNON.Body({
+        mass: 0,
+        material: physicsMaterial,
+        shape: new CANNON.Box(new CANNON.Vec3(width / 2, .75, depth / 2)),
+        position: new CANNON.Vec3(x, .75, z)
+      }));
+    }
+    addArenaWall(0, -2.3, 7.1, .18);
+    addArenaWall(0, 2.3, 7.1, .18);
+    addArenaWall(-3.45, 0, .18, 4.9);
+    addArenaWall(3.45, 0, .18, 4.9);
 
     const groundBody = new CANNON.Body({ mass: 0, material: groundMaterial, shape: new CANNON.Plane() });
     groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
@@ -280,15 +308,17 @@
     }
 
     function formatNumber(value) {
-      if (value < 1000) return String(Math.floor(value));
-      const units = [
-        ['Qi', 1e18], ['Qa', 1e15], ['T', 1e12], ['B', 1e9], ['M', 1e6], ['K', 1e3]
-      ];
-      for (const [suffix, unit] of units) {
-        if (value >= unit) return (value / unit).toFixed(2) + suffix;
-      }
-      return value.toExponential(2).replace('e+', 'e');
+      return Math.floor(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     }
+
+    function setCounterText(text) {
+      counterElement.textContent = text;
+      const availableWidth = window.innerWidth * .94;
+      const approximateCharacterWidth = .68;
+      const fontSize = Math.min(180, availableWidth / (text.length * approximateCharacterWidth));
+      counterElement.style.fontSize = `${fontSize}px`;
+    }
+    setCounterText(lastCounterText);
 
     function addScore(amount, position = null, showPopup = true) {
       if (!(amount > 0)) return;
@@ -323,7 +353,7 @@
       if ('vibrate' in navigator) navigator.vibrate(28);
       for (const ball of balls) {
         ball.body.wakeUp();
-        ball.body.velocity.set((Math.random() - .5) * 5, 13 + Math.random() * 6, (Math.random() - .5) * 5);
+        ball.body.velocity.set((Math.random() - .5) * 1, 13 + Math.random() * 6, (Math.random() - .5) * 1);
         ball.body.angularVelocity.set((Math.random() - .5) * 8, (Math.random() - .5) * 8, (Math.random() - .5) * 8);
         spawnSparks(ball.mesh.position, 5, ball.material.color);
       }
@@ -362,7 +392,7 @@
 
     function makePopupTexture() {
       const canvas = document.createElement('canvas');
-      canvas.width = 256;
+      canvas.width = 512;
       canvas.height = 96;
       const texture = new THREE.CanvasTexture(canvas);
       texture.colorSpace = THREE.SRGBColorSpace;
@@ -387,17 +417,22 @@
       const popup = popups.find(item => item.life <= 0);
       if (!popup) return;
       const context = popup.canvas.getContext('2d');
-      context.clearRect(0, 0, 256, 96);
+      const label = '+' + formatNumber(amount);
+      context.clearRect(0, 0, 512, 96);
       context.font = '900 48px system-ui, sans-serif';
+      const measuredWidth = context.measureText(label).width;
+      if (measuredWidth > 470) {
+        context.font = `900 ${48 * 470 / measuredWidth}px system-ui, sans-serif`;
+      }
       context.textAlign = 'center';
       context.textBaseline = 'middle';
       context.shadowColor = 'rgba(120,235,255,.95)';
       context.shadowBlur = 18;
       context.fillStyle = '#ffffff';
-      context.fillText('+' + formatNumber(amount), 128, 50);
+      context.fillText(label, 256, 50);
       popup.texture.needsUpdate = true;
       popup.sprite.position.copy(position);
-      popup.sprite.scale.set(1.45, .55, 1);
+      popup.sprite.scale.set(2, .375, 1);
       popup.sprite.material.opacity = 1;
       popup.sprite.visible = true;
       popup.velocity.set((Math.random() - .5) * .45, 1.5 + Math.random() * .65, (Math.random() - .5) * .35);
@@ -536,31 +571,14 @@
       balls.push(ball);
     }
 
-    function spawnBurst(clientX, clientY) {
+    function spawnBurst() {
       spawnCount++;
-      const normalizedX = (clientX / window.innerWidth) * 2 - 1;
-      const normalizedY = -(clientY / window.innerHeight) * 2 + 1;
-      raycaster.setFromCamera(new THREE.Vector2(normalizedX, normalizedY), camera);
-      const direction = raycaster.ray.direction;
-      const denominator = direction.y;
-      let targetX = normalizedX * 3.5;
-      let targetZ = 2.2;
-      if (Math.abs(denominator) > 1e-5) {
-        const distance = -raycaster.ray.origin.y / denominator;
-        if (distance > 0) {
-          targetX = raycaster.ray.origin.x + direction.x * distance;
-          targetZ = raycaster.ray.origin.z + direction.z * distance;
-        }
-      }
-      targetX = THREE.MathUtils.clamp(targetX, -5, 5);
-      targetZ = THREE.MathUtils.clamp(targetZ, -2.5, 5.5);
-
       const count = 8 + Math.floor(Math.random() * 8);
       for (let index = 0; index < count; index++) {
         createBall(
-          targetX + (Math.random() - .5) * 1.5,
-          5.4 + Math.random() * 1.4,
-          targetZ + (Math.random() - .5) * 1.5,
+          (Math.random() - .5) * 5.8,
+          4.4 + Math.random() * .9,
+          (Math.random() - .5) * 3.6,
           Math.floor(Math.random() * palette.length)
         );
       }
@@ -604,7 +622,7 @@
       const counterText = formatNumber(score);
       if (counterText !== lastCounterText) {
         if (counterText.length > lastCounterText.length) digitPulse = 1;
-        counterElement.textContent = counterText;
+        setCounterText(counterText);
         lastCounterText = counterText;
       }
       const scale = 1 + counterPulse * .055 + digitPulse * .09;
@@ -662,12 +680,8 @@
       }
     }
 
-    function updateCamera(deltaTime) {
-      const parallaxX = pointerX * .55;
-      const parallaxY = pointerY * .3;
-      camera.position.x += ((cameraBase.x + parallaxX) - camera.position.x) * Math.min(1, deltaTime * 3.5);
-      camera.position.y += ((cameraBase.y + parallaxY) - camera.position.y) * Math.min(1, deltaTime * 3.5);
-      camera.position.z = cameraBase.z;
+    function updateCamera() {
+      camera.position.copy(cameraBase);
       if (shake > .001) {
         camera.position.x += (Math.random() - .5) * shake * .28;
         camera.position.y += (Math.random() - .5) * shake * .24;
@@ -675,30 +689,17 @@
       camera.lookAt(cameraTarget);
     }
 
-    const spawnPointerX = window.innerWidth / 2;
-    const spawnPointerY = window.innerHeight / 2;
-
     function handlePressStart(event) {
       if (pressed) return;
       event.preventDefault();
       initializeAudio();
       pressed = true;
       activePointerId = event.pointerId;
-      spawnPointerX = event.clientX;
-      spawnPointerY = event.clientY;
       lastSpawnAt = performance.now();
-      spawnBurst(event.clientX, event.clientY);
+      spawnBurst();
     }
 
     window.addEventListener('pointerdown', handlePressStart, { passive: false });
-    window.addEventListener('pointermove', event => {
-      pointerX = (event.clientX / window.innerWidth) * 2 - 1;
-      pointerY = -((event.clientY / window.innerHeight) * 2 - 1);
-      if (pressed && event.pointerId === activePointerId) {
-        spawnPointerX = event.clientX;
-        spawnPointerY = event.clientY;
-      }
-    }, { passive: true });
 
     function releasePointer() {
       pressed = false;
@@ -711,10 +712,22 @@
 
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
+      fitCamera();
       camera.updateProjectionMatrix();
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setSize(window.innerWidth, window.innerHeight);
+      setCounterText(lastCounterText);
     });
+
+    function fitCamera() {
+      const aspect = window.innerWidth / window.innerHeight;
+      const nearWallDistance = Math.max(1, cameraBase.z - 2.4);
+      const horizontalHalfAngle = Math.atan(3.75 / nearWallDistance);
+      const requiredVerticalFov = 2 * Math.atan(Math.tan(horizontalHalfAngle) / aspect) * 180 / Math.PI;
+      camera.fov = THREE.MathUtils.clamp(requiredVerticalFov, 55, 96);
+    }
+    fitCamera();
+    camera.updateProjectionMatrix();
 
     function animate() {
       requestAnimationFrame(animate);
@@ -723,13 +736,13 @@
 
       if (pressed && now - lastSpawnAt >= HOLD_INTERVAL) {
         lastSpawnAt = now;
-        spawnBurst(spawnPointerX, spawnPointerY);
+        spawnBurst();
       }
 
       world.step(1 / 60, deltaTime, 5);
       updateBalls(deltaTime);
       updateEffects(deltaTime);
-      updateCamera(deltaTime);
+      updateCamera();
       renderer.render(scene, camera);
     }
 
