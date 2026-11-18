@@ -11,7 +11,7 @@
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #030408;
+      background: #030509;
     }
     body {
       touch-action: none;
@@ -20,13 +20,17 @@
       -webkit-tap-highlight-color: transparent;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
-    canvas { display: block; }
+    canvas {
+      display: block;
+      position: fixed;
+      inset: 0;
+    }
     #count {
       position: fixed;
-      top: max(16px, 3vh);
+      top: max(12px, 2.6vh);
       left: 0;
       right: 0;
-      color: #fff;
+      color: #ffffff;
       font-weight: 900;
       line-height: .92;
       letter-spacing: -.045em;
@@ -34,37 +38,29 @@
       text-align: center;
       white-space: nowrap;
       pointer-events: none;
-      text-shadow:
-        0 0 18px rgba(120, 220, 255, .82),
-        0 0 56px rgba(80, 120, 255, .46),
-        0 4px 20px rgba(0, 0, 0, .68);
     }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
 </head>
 <body>
   <div id="count">0</div>
   <canvas id="stage"></canvas>
 
   <script>
-    const {
-      Bodies,
-      Body,
-      Composite,
-      Engine,
-      Events
-    } = Matter;
+    'use strict';
 
     const BOARD_WIDTH = 393;
     const BOARD_HEIGHT = 850;
-    const WALL_THICKNESS = 20;
-    const MAX_BALLS = 1500;
-    const BALL_RADIUS = BOARD_WIDTH * 0.015;
+    const BALL_RADIUS = 5.9;
     const SPLIT_COOLDOWN_MS = 500;
-    const MAX_SPEED = 11.5;
-    const FIXED_STEP = 1000 / 60;
-    const WALL_CATEGORY = 0x0001;
-    const BALL_CATEGORY = 0x0002;
+    const PHYSICS_STEPS = 2;
+    const MAX_FRAME_DELTA_MS = 1000 / 60;
+    const GRAVITY = 500;
+    const MIN_SPEED = 80;
+    const MAX_SPEED = 620;
+    const RESTITUTION = 0.99;
+    const GRID_CELL_SIZE = 44;
+    const GRID_COLUMNS = Math.ceil(BOARD_WIDTH / GRID_CELL_SIZE);
+    const GRID_ROWS = Math.ceil(BOARD_HEIGHT / GRID_CELL_SIZE);
     const DOUBLE_TAP_MS = 320;
     const DOUBLE_TAP_DISTANCE = 42;
 
@@ -72,53 +68,20 @@
     const context = canvas.getContext('2d');
     const countElement = document.getElementById('count');
     const measurementContext = document.createElement('canvas').getContext('2d');
-
-    const palette = [
-      { core: 'rgba(255,255,255,1)', glow: '#5df8ff' },
-      { core: 'rgba(255,255,255,1)', glow: '#ff67e7' },
-      { core: 'rgba(255,255,255,1)', glow: '#9dff5a' },
-      { core: 'rgba(255,255,255,1)', glow: '#ffd75d' },
-      { core: 'rgba(255,255,255,1)', glow: '#8b95ff' },
-      { core: 'rgba(255,255,255,1)', glow: '#ff788e' }
-    ];
-    const ballSprites = palette.map(makeBallSprite);
-    const obstacles = [];
+    const segments = [];
+    const pegs = [];
     const balls = [];
-    const pendingSplits = [];
-    const sparks = new Array(900);
-
-    const queuedBall = {
-      x: BOARD_WIDTH * 0.5,
-      y: 170,
-      colorIndex: 0
-    };
-
-    const engine = Engine.create({
-      enableSleeping: false,
-      positionIterations: 4,
-      velocityIterations: 3,
-      constraintIterations: 1
-    });
-    const world = engine.world;
-    const wallOptions = {
-      isStatic: true,
-      restitution: 0.99,
-      friction: 0,
-      frictionStatic: 0,
-      collisionFilter: {
-        category: WALL_CATEGORY,
-        mask: BALL_CATEGORY
-      }
-    };
+    const cellWalls = new Array(GRID_COLUMNS * GRID_ROWS);
+    const queuedBall = { x: BOARD_WIDTH * 0.5, y: 112 };
 
     let launched = false;
-    let sparkCursor = 0;
+    let lastFrameTime = 0;
     let lastTapTime = 0;
     let lastTapX = 0;
     let lastTapY = 0;
-    let lastWakeTime = 0;
     let lastTickTime = 0;
-    let lastCountLength = 1;
+    let displayedCount = -1;
+    let displayedTextLength = 0;
     let audioContext = null;
     let canvasWidth = 1;
     let canvasHeight = 1;
@@ -126,28 +89,15 @@
     let boardScale = 1;
     let boardOffsetX = 0;
     let boardOffsetY = 0;
+    let renderScale = 1;
+    let renderOffsetX = 0;
+    let renderOffsetY = 0;
+    let segmentCount = 0;
 
-    for (let index = 0; index < sparks.length; index++) {
-      sparks[index] = { life: 0 };
-    }
+    createWalls();
+    segmentCount = segments.length;
+    buildWallGrid();
 
-    addOuterWalls();
-    addAngledBar(82, 190, 180, 14, -0.38, '#5df8ff');
-    addAngledBar(312, 325, 168, 14, 0.42, '#ff67e7');
-    addAngledBar(100, 500, 188, 14, 0.34, '#9dff5a');
-    addAngledBar(288, 675, 160, 14, -0.45, '#ffd75d');
-    addTriangle(188, 402, 56, 0.22, '#8b95ff');
-    addTriangle(302, 580, 44, -0.18, '#ff788e');
-    addPeg(62, 110, 14, '#5df8ff');
-    addPeg(330, 155, 10, '#ff67e7');
-    addPeg(178, 270, 12, '#9dff5a');
-    addPeg(78, 615, 18, '#ffd75d');
-    addPeg(314, 778, 12, '#8b95ff');
-    addGappedBar(38, 442, 124, 12, '#ff788e');
-    addGappedBar(252, 442, 102, 12, '#ff788e');
-    addDiamond(197, 728, 54, '#5df8ff');
-
-    Events.on(engine, 'collisionStart', handleCollisions);
     window.addEventListener('resize', resize, { passive: true });
     window.addEventListener('orientationchange', resize, { passive: true });
     window.addEventListener('pointerdown', handlePointerDown);
@@ -157,192 +107,304 @@
     refreshCountDisplay(true);
     requestAnimationFrame(animationFrame);
 
-    function addOuterWalls() {
-      Composite.add(world, [
-        Bodies.rectangle(-WALL_THICKNESS / 2, BOARD_HEIGHT / 2, WALL_THICKNESS, BOARD_HEIGHT + WALL_THICKNESS * 2, wallOptions),
-        Bodies.rectangle(BOARD_WIDTH + WALL_THICKNESS / 2, BOARD_HEIGHT / 2, WALL_THICKNESS, BOARD_HEIGHT + WALL_THICKNESS * 2, wallOptions),
-        Bodies.rectangle(BOARD_WIDTH / 2, -WALL_THICKNESS / 2, BOARD_WIDTH + WALL_THICKNESS * 2, WALL_THICKNESS, wallOptions),
-        Bodies.rectangle(BOARD_WIDTH / 2, BOARD_HEIGHT + WALL_THICKNESS / 2, BOARD_WIDTH + WALL_THICKNESS * 2, WALL_THICKNESS, wallOptions)
-      ]);
+    function createWalls() {
+      addSegment(0, 0, BOARD_WIDTH, 0);
+      addSegment(BOARD_WIDTH, 0, BOARD_WIDTH, BOARD_HEIGHT);
+      addSegment(BOARD_WIDTH, BOARD_HEIGHT, 0, BOARD_HEIGHT);
+      addSegment(0, BOARD_HEIGHT, 0, 0);
+
+      addSegment(66, 204, 186, 151);
+      addSegment(204, 330, 322, 382);
+      addSegment(69, 501, 203, 553);
+      addSegment(322, 678, 198, 634);
+
+      addTriangle(186, 415, 54, -0.12);
+      addTriangle(297, 586, 43, 0.16);
+
+      addSegment(29, 456, 129, 456);
+      addSegment(167, 456, 365, 456);
+
+      addDiamond(198, 730, 51);
+
+      addPeg(61, 118, 14);
+      addPeg(333, 162, 10);
+      addPeg(178, 274, 12);
+      addPeg(77, 624, 18);
+      addPeg(316, 781, 12);
+      addPeg(196, 670, 9);
     }
 
-    function addObstacle(body, color) {
-      Composite.add(world, body);
-      obstacles.push({ body, color });
+    function addSegment(x1, y1, x2, y2) {
+      segments.push({ x1, y1, x2, y2 });
     }
 
-    function addAngledBar(x, y, width, height, angle, color) {
-      addObstacle(Bodies.rectangle(x, y, width, height, {
-        ...wallOptions,
-        angle
-      }), color);
+    function addPeg(cx, cy, r) {
+      pegs.push({ cx, cy, r });
     }
 
-    function addTriangle(x, y, radius, angle, color) {
-      addObstacle(Bodies.polygon(x, y, 3, radius, {
-        ...wallOptions,
-        angle
-      }), color);
-    }
-
-    function addPeg(x, y, radius, color) {
-      addObstacle(Bodies.circle(x, y, radius, wallOptions), color);
-    }
-
-    function addGappedBar(x, y, width, height, color) {
-      addObstacle(Bodies.rectangle(x, y, width, height, wallOptions), color);
-    }
-
-    function addDiamond(x, y, size, color) {
-      addObstacle(Bodies.rectangle(x, y, size, size, {
-        ...wallOptions,
-        angle: Math.PI / 4
-      }), color);
-    }
-
-    function handleCollisions(event) {
-      const now = performance.now();
-
-      for (const pair of event.pairs) {
-        const parent = pair.bodyA.plugin.isBall ? pair.bodyA : pair.bodyB;
-        if (!parent.plugin.isBall) continue;
-        if (now - parent.plugin.lastSplitAt < SPLIT_COOLDOWN_MS) continue;
-        if (balls.length + pendingSplits.length >= MAX_BALLS) continue;
-
-        parent.plugin.lastSplitAt = now;
-        const normal = pair.collision.normal;
-        const towardOpenSpace = pair.bodyA === parent ? -1 : 1;
-        const separation = BALL_RADIUS * 2.35;
-        pendingSplits.push({
-          parent,
-          x: parent.position.x + normal.x * towardOpenSpace * separation + randomRange(-1.5, 1.5),
-          y: parent.position.y + normal.y * towardOpenSpace * separation + randomRange(-1.5, 1.5)
+    function addTriangle(cx, cy, radius, rotation) {
+      const points = [];
+      for (let index = 0; index < 3; index++) {
+        const angle = rotation - Math.PI / 2 + index * Math.PI * 2 / 3;
+        points.push({
+          x: cx + Math.cos(angle) * radius,
+          y: cy + Math.sin(angle) * radius
         });
       }
+      for (let index = 0; index < points.length; index++) {
+        const next = points[(index + 1) % points.length];
+        addSegment(points[index].x, points[index].y, next.x, next.y);
+      }
     }
 
-    function createBallBody(x, y, velocityX, velocityY, colorIndex, lastSplitAt) {
-      const body = Bodies.circle(x, y, BALL_RADIUS, {
-        restitution: 0.99,
-        friction: 0,
-        frictionStatic: 0,
-        frictionAir: 0,
-        slop: 0.03,
-        collisionFilter: {
-          category: BALL_CATEGORY,
-          mask: WALL_CATEGORY
-        },
-        plugin: {
-          isBall: true,
-          lastSplitAt,
-          colorIndex
+    function addDiamond(cx, cy, halfSize) {
+      addSegment(cx - halfSize, cy, cx, cy - halfSize);
+      addSegment(cx, cy - halfSize, cx + halfSize, cy);
+      addSegment(cx + halfSize, cy, cx, cy + halfSize);
+      addSegment(cx, cy + halfSize, cx - halfSize, cy);
+    }
+
+    function buildWallGrid() {
+      for (let index = 0; index < cellWalls.length; index++) {
+        cellWalls[index] = [];
+      }
+
+      for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
+        const segment = segments[segmentIndex];
+        const minimumX = Math.min(segment.x1, segment.x2) - BALL_RADIUS;
+        const maximumX = Math.max(segment.x1, segment.x2) + BALL_RADIUS;
+        const minimumY = Math.min(segment.y1, segment.y2) - BALL_RADIUS;
+        const maximumY = Math.max(segment.y1, segment.y2) + BALL_RADIUS;
+        addWallToCells(segmentIndex, minimumX, maximumX, minimumY, maximumY);
+      }
+
+      for (let pegIndex = 0; pegIndex < pegs.length; pegIndex++) {
+        const peg = pegs[pegIndex];
+        const reach = BALL_RADIUS + peg.r;
+        addWallToCells(
+          segmentCount + pegIndex,
+          peg.cx - reach,
+          peg.cx + reach,
+          peg.cy - reach,
+          peg.cy + reach
+        );
+      }
+    }
+
+    function addWallToCells(wallIndex, minimumX, maximumX, minimumY, maximumY) {
+      const firstColumn = clampToRange(Math.floor(minimumX / GRID_CELL_SIZE), 0, GRID_COLUMNS - 1);
+      const lastColumn = clampToRange(Math.floor(maximumX / GRID_CELL_SIZE), 0, GRID_COLUMNS - 1);
+      const firstRow = clampToRange(Math.floor(minimumY / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+      const lastRow = clampToRange(Math.floor(maximumY / GRID_CELL_SIZE), 0, GRID_ROWS - 1);
+
+      for (let row = firstRow; row <= lastRow; row++) {
+        for (let column = firstColumn; column <= lastColumn; column++) {
+          cellWalls[row * GRID_COLUMNS + column].push(wallIndex);
         }
-      });
-      Body.setVelocity(body, { x: velocityX, y: velocityY });
-      Composite.add(world, body);
-      return body;
-    }
-
-    function processPendingSplits(now) {
-      while (pendingSplits.length > 0) {
-        if (balls.length >= MAX_BALLS) break;
-        const request = pendingSplits.shift();
-        const x = clamp(request.x, BALL_RADIUS, BOARD_WIDTH - BALL_RADIUS);
-        const y = clamp(request.y, BALL_RADIUS, BOARD_HEIGHT - BALL_RADIUS);
-        const parentVelocity = request.parent.velocity;
-        const colorIndex = balls.length % palette.length;
-        const velocityX = parentVelocity.x + randomRange(-1.6, 1.6);
-        const velocityY = parentVelocity.y + randomRange(-1.1, 1.5);
-        const body = createBallBody(x, y, velocityX, velocityY, colorIndex, now);
-        balls.push(body);
-        limitVelocity(body);
-        emitSparks(request.parent.position.x, request.parent.position.y, colorIndex);
       }
-      refreshCountDisplay();
-    }
-
-    function launchInitialBall() {
-      const velocityX = randomRange(-3.8, 3.8);
-      const velocityY = randomRange(4.8, 7.2);
-      const now = performance.now();
-      const body = createBallBody(
-        queuedBall.x,
-        queuedBall.y,
-        velocityX,
-        velocityY,
-        queuedBall.colorIndex,
-        now
-      );
-      balls.push(body);
-      launched = true;
-      refreshCountDisplay();
-    }
-
-    function resetBalls() {
-      for (const body of balls) {
-        Composite.remove(world, body);
-      }
-      balls.length = 0;
-      pendingSplits.length = 0;
-      launched = false;
-      for (const spark of sparks) spark.life = 0;
-      refreshCountDisplay(true);
     }
 
     function handlePointerDown(event) {
-      event.preventDefault();
+      if (event.cancelable) event.preventDefault();
       ensureAudio();
+
       const now = performance.now();
       const tapDistance = Math.hypot(event.clientX - lastTapX, event.clientY - lastTapY);
-      const isDoubleTap = launched && now - lastTapTime <= DOUBLE_TAP_MS && tapDistance <= DOUBLE_TAP_DISTANCE;
+      const isDoubleTap = launched &&
+        now - lastTapTime <= DOUBLE_TAP_MS &&
+        tapDistance <= DOUBLE_TAP_DISTANCE;
 
       if (isDoubleTap) {
         resetBalls();
         lastTapTime = 0;
+        lastTapX = event.clientX;
+        lastTapY = event.clientY;
         return;
       }
 
       lastTapTime = now;
       lastTapX = event.clientX;
       lastTapY = event.clientY;
-      if (!launched) launchInitialBall();
+      if (!launched) launchInitialBall(now);
     }
 
-    function randomRange(minimum, maximum) {
-      return minimum + Math.random() * (maximum - minimum);
+    function launchInitialBall(now) {
+      const ball = {
+        x: queuedBall.x,
+        y: queuedBall.y,
+        vx: randomRange(-150, 150),
+        vy: randomRange(190, 280),
+        lastSplit: now
+      };
+      limitBallSpeed(ball);
+      balls.push(ball);
+      launched = true;
     }
 
-    function clamp(value, minimum, maximum) {
-      return Math.min(maximum, Math.max(minimum, value));
+    function resetBalls() {
+      balls.length = 0;
+      launched = false;
+      refreshCountDisplay(true);
     }
 
-    function wakeSlowBalls(now) {
-      if (now - lastWakeTime < 120) return;
-      lastWakeTime = now;
+    function animationFrame(timestamp) {
+      if (lastFrameTime === 0) lastFrameTime = timestamp;
+      const frameDelta = Math.min(timestamp - lastFrameTime, MAX_FRAME_DELTA_MS);
+      lastFrameTime = timestamp;
 
-      for (const body of balls) {
-        const speed = Math.hypot(body.velocity.x, body.velocity.y);
-        if (speed < 1.9) {
-          Body.applyForce(body, body.position, {
-            x: body.mass * randomRange(-0.0025, 0.0025),
-            y: body.mass * randomRange(-0.004, -0.0005)
-          });
+      updatePhysics(performance.now(), Math.max(frameDelta, 0) / 1000);
+      draw();
+      refreshCountDisplay(false);
+      requestAnimationFrame(animationFrame);
+    }
+
+    function updatePhysics(now, frameDeltaSeconds) {
+      const stepDelta = frameDeltaSeconds / PHYSICS_STEPS;
+      for (let step = 0; step < PHYSICS_STEPS; step++) {
+        const ballCount = balls.length;
+        for (let index = 0; index < ballCount; index++) {
+          const ball = balls[index];
+          ball.vy += GRAVITY * stepDelta;
+          ball.x += ball.vx * stepDelta;
+          ball.y += ball.vy * stepDelta;
+          collideWithWalls(ball, now);
+          limitBallSpeed(ball);
         }
       }
     }
 
-    function limitVelocities() {
-      for (const body of balls) limitVelocity(body);
+    function collideWithWalls(ball, now) {
+      const column = clampToRange(
+        Math.floor(ball.x / GRID_CELL_SIZE),
+        0,
+        GRID_COLUMNS - 1
+      );
+      const row = clampToRange(
+        Math.floor(ball.y / GRID_CELL_SIZE),
+        0,
+        GRID_ROWS - 1
+      );
+      const walls = cellWalls[row * GRID_COLUMNS + column];
+
+      for (let index = 0; index < walls.length; index++) {
+        const wallIndex = walls[index];
+        if (wallIndex < segmentCount) {
+          collideWithSegment(ball, segments[wallIndex], now);
+        } else {
+          collideWithPeg(ball, pegs[wallIndex - segmentCount], now);
+        }
+      }
     }
 
-    function limitVelocity(body) {
-      const speed = Math.hypot(body.velocity.x, body.velocity.y);
-      if (speed <= MAX_SPEED) return;
-      const scale = MAX_SPEED / speed;
-      Body.setVelocity(body, {
-        x: body.velocity.x * scale,
-        y: body.velocity.y * scale
-      });
+    function collideWithSegment(ball, segment, now) {
+      const deltaX = segment.x2 - segment.x1;
+      const deltaY = segment.y2 - segment.y1;
+      const lengthSquared = deltaX * deltaX + deltaY * deltaY;
+      let position = (
+        (ball.x - segment.x1) * deltaX +
+        (ball.y - segment.y1) * deltaY
+      ) / lengthSquared;
+      position = clamp01(position);
+
+      const closestX = segment.x1 + deltaX * position;
+      const closestY = segment.y1 + deltaY * position;
+      let normalX = ball.x - closestX;
+      let normalY = ball.y - closestY;
+      const distanceSquared = normalX * normalX + normalY * normalY;
+      if (distanceSquared > BALL_RADIUS * BALL_RADIUS) return;
+
+      const distance = Math.sqrt(distanceSquared);
+      if (distance > 0.000001) {
+        normalX /= distance;
+        normalY /= distance;
+      } else {
+        const length = Math.sqrt(lengthSquared);
+        normalX = -deltaY / length;
+        normalY = deltaX / length;
+      }
+
+      const penetration = BALL_RADIUS - distance;
+      ball.x += normalX * penetration;
+      ball.y += normalY * penetration;
+      reflectBall(ball, normalX, normalY);
+      splitBall(ball, closestX, closestY, normalX, normalY, now);
+    }
+
+    function collideWithPeg(ball, peg, now) {
+      let normalX = ball.x - peg.cx;
+      let normalY = ball.y - peg.cy;
+      const reach = BALL_RADIUS + peg.r;
+      const distanceSquared = normalX * normalX + normalY * normalY;
+      if (distanceSquared > reach * reach) return;
+
+      const distance = Math.sqrt(distanceSquared);
+      if (distance > 0.000001) {
+        normalX /= distance;
+        normalY /= distance;
+      } else {
+        const angle = Math.random() * Math.PI * 2;
+        normalX = Math.cos(angle);
+        normalY = Math.sin(angle);
+      }
+
+      const penetration = reach - distance;
+      ball.x += normalX * penetration;
+      ball.y += normalY * penetration;
+      reflectBall(ball, normalX, normalY);
+      splitBall(
+        ball,
+        peg.cx + normalX * peg.r,
+        peg.cy + normalY * peg.r,
+        normalX,
+        normalY,
+        now
+      );
+    }
+
+    function reflectBall(ball, normalX, normalY) {
+      const normalVelocity = ball.vx * normalX + ball.vy * normalY;
+      if (normalVelocity >= 0) return;
+
+      const impulse = -(1 + RESTITUTION) * normalVelocity;
+      ball.vx += impulse * normalX;
+      ball.vy += impulse * normalY;
+    }
+
+    function splitBall(ball, contactX, contactY, normalX, normalY, now) {
+      if (now - ball.lastSplit < SPLIT_COOLDOWN_MS) return;
+
+      ball.lastSplit = now;
+      const child = {
+        x: contactX + normalX * BALL_RADIUS * 1.25,
+        y: contactY + normalY * BALL_RADIUS * 1.25,
+        vx: ball.vx + randomRange(-55, 55),
+        vy: ball.vy + randomRange(-45, 80),
+        lastSplit: now
+      };
+      child.x = clampToRange(child.x, BALL_RADIUS, BOARD_WIDTH - BALL_RADIUS);
+      child.y = clampToRange(child.y, BALL_RADIUS, BOARD_HEIGHT - BALL_RADIUS);
+      limitBallSpeed(child);
+      balls.push(child);
+      playTick();
+    }
+
+    function limitBallSpeed(ball) {
+      const speedSquared = ball.vx * ball.vx + ball.vy * ball.vy;
+      if (speedSquared > MAX_SPEED * MAX_SPEED) {
+        const scale = MAX_SPEED / Math.sqrt(speedSquared);
+        ball.vx *= scale;
+        ball.vy *= scale;
+      } else if (speedSquared < MIN_SPEED * MIN_SPEED) {
+        if (speedSquared < 0.000001) {
+          const angle = Math.random() * Math.PI * 2;
+          ball.vx = Math.cos(angle) * MIN_SPEED;
+          ball.vy = Math.sin(angle) * MIN_SPEED;
+        } else {
+          const scale = MIN_SPEED / Math.sqrt(speedSquared);
+          ball.vx *= scale;
+          ball.vy *= scale;
+        }
+      }
     }
 
     function ensureAudio() {
@@ -366,272 +428,122 @@
     function playTick() {
       if (!audioContext || audioContext.state !== 'running') return;
       const now = audioContext.currentTime;
-      if (now - lastTickTime < 0.045) return;
+      if (now - lastTickTime < 0.1) return;
       lastTickTime = now;
 
-      const intensity = Math.min(1, balls.length / MAX_BALLS);
       const oscillator = audioContext.createOscillator();
       const gain = audioContext.createGain();
       oscillator.type = 'triangle';
-      oscillator.frequency.value = 280 + 440 * intensity;
+      oscillator.frequency.value = 560;
       gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.04, now + 0.004);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.075);
+      gain.gain.exponentialRampToValueAtTime(0.025, now + 0.004);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.07);
       oscillator.connect(gain).connect(audioContext.destination);
       oscillator.start(now);
-      oscillator.stop(now + 0.085);
+      oscillator.stop(now + 0.08);
     }
 
-    function emitSparks(x, y, colorIndex) {
-      const color = palette[colorIndex].glow;
-      for (let count = 0; count < 5; count++) {
-        const spark = sparks[sparkCursor % sparks.length];
-        sparkCursor++;
-        const angle = Math.random() * Math.PI * 2;
-        const speed = randomRange(32, 82);
-        spark.x = x + randomRange(-3, 3);
-        spark.y = y + randomRange(-3, 3);
-        spark.velocityX = Math.cos(angle) * speed;
-        spark.velocityY = Math.sin(angle) * speed - 24;
-        spark.life = randomRange(0.24, 0.42);
-        spark.age = 0;
-        spark.size = randomRange(2.5, 4.5);
-        spark.sprite = makeColoredSparkSprite(color);
+    function draw() {
+      context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      context.fillStyle = '#030509';
+      context.fillRect(0, 0, canvasWidth, canvasHeight);
+
+      context.setTransform(renderScale, 0, 0, renderScale, renderOffsetX, renderOffsetY);
+      context.fillStyle = '#05070d';
+      context.fillRect(0, 0, BOARD_WIDTH, BOARD_HEIGHT);
+      drawWalls();
+      drawBalls();
+    }
+
+    function drawWalls() {
+      context.strokeStyle = '#8fb6cf';
+      context.lineWidth = 2.5;
+      context.beginPath();
+      for (const segment of segments) {
+        context.moveTo(segment.x1, segment.y1);
+        context.lineTo(segment.x2, segment.y2);
       }
-      playTick();
+      context.stroke();
+
+      context.beginPath();
+      for (const peg of pegs) {
+        context.moveTo(peg.cx + peg.r, peg.cy);
+        context.arc(peg.cx, peg.cy, peg.r, 0, Math.PI * 2);
+      }
+      context.stroke();
     }
 
-    function updateSparks(deltaSeconds) {
-      for (const spark of sparks) {
-        if (!spark.life) continue;
-        spark.age += deltaSeconds;
-        if (spark.age >= spark.life) {
-          spark.life = 0;
-          continue;
+    function drawBalls() {
+      context.fillStyle = '#f4f8ff';
+      context.beginPath();
+
+      if (!launched) {
+        context.moveTo(queuedBall.x + BALL_RADIUS, queuedBall.y);
+        context.arc(queuedBall.x, queuedBall.y, BALL_RADIUS, 0, Math.PI * 2);
+      } else {
+        for (const ball of balls) {
+          context.moveTo(ball.x + BALL_RADIUS, ball.y);
+          context.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
         }
-        spark.x += spark.velocityX * deltaSeconds;
-        spark.y += spark.velocityY * deltaSeconds;
-        spark.velocityY += 70 * deltaSeconds;
-      }
-    }
-
-    function makeBallSprite(color) {
-      const sprite = document.createElement('canvas');
-      const size = 48;
-      sprite.width = size;
-      sprite.height = size;
-      const spriteContext = sprite.getContext('2d');
-      const radius = size / 2;
-      const gradient = spriteContext.createRadialGradient(radius, radius, 0, radius, radius, radius);
-      gradient.addColorStop(0, color.core);
-      gradient.addColorStop(0.25, color.glow);
-      gradient.addColorStop(0.54, hexToRgba(color.glow, 0.35));
-      gradient.addColorStop(1, hexToRgba(color.glow, 0));
-      spriteContext.fillStyle = gradient;
-      spriteContext.fillRect(0, 0, size, size);
-      return sprite;
-    }
-
-    function makeColoredSparkSprite(color) {
-      if (makeColoredSparkSprite.cache.has(color)) {
-        return makeColoredSparkSprite.cache.get(color);
       }
 
-      const sprite = document.createElement('canvas');
-      sprite.width = 32;
-      sprite.height = 32;
-      const spriteContext = sprite.getContext('2d');
-      const gradient = spriteContext.createRadialGradient(16, 16, 0, 16, 16, 16);
-      gradient.addColorStop(0, 'rgba(255,255,255,1)');
-      gradient.addColorStop(0.32, color);
-      gradient.addColorStop(1, hexToRgba(color, 0));
-      spriteContext.fillStyle = gradient;
-      spriteContext.fillRect(0, 0, 32, 32);
-      makeColoredSparkSprite.cache.set(color, sprite);
-      return sprite;
-    }
-
-    makeColoredSparkSprite.cache = new Map();
-
-    function hexToRgba(hex, alpha) {
-      const value = parseInt(hex.slice(1), 16);
-      return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
+      context.fill();
     }
 
     function resize() {
       canvasWidth = window.innerWidth;
       canvasHeight = window.innerHeight;
-      devicePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.round(canvasWidth * devicePixelRatio);
-      canvas.height = Math.round(canvasHeight * devicePixelRatio);
-      canvas.style.width = `${canvasWidth}px`;
-      canvas.style.height = `${canvasHeight}px`;
+      devicePixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
       boardScale = Math.min(canvasWidth / BOARD_WIDTH, canvasHeight / BOARD_HEIGHT);
       boardOffsetX = (canvasWidth - BOARD_WIDTH * boardScale) / 2;
       boardOffsetY = (canvasHeight - BOARD_HEIGHT * boardScale) / 2;
+      renderScale = devicePixelRatio * boardScale;
+      renderOffsetX = boardOffsetX * devicePixelRatio;
+      renderOffsetY = boardOffsetY * devicePixelRatio;
+
+      canvas.style.width = `${canvasWidth}px`;
+      canvas.style.height = `${canvasHeight}px`;
+      canvas.width = Math.max(1, Math.round(canvasWidth * devicePixelRatio));
+      canvas.height = Math.max(1, Math.round(canvasHeight * devicePixelRatio));
       refreshCountDisplay(true);
     }
 
-    function refreshCountDisplay(forceFit = false) {
-      const text = balls.length.toLocaleString('en-US');
-      countElement.textContent = text;
-      if (forceFit || text.length !== lastCountLength) {
-        lastCountLength = text.length;
-        fitCounter(text);
+    function refreshCountDisplay(forceFit) {
+      if (balls.length !== displayedCount) {
+        displayedCount = balls.length;
+        const text = displayedCount.toLocaleString('en-US');
+        countElement.textContent = text;
+
+        if (text.length !== displayedTextLength || forceFit) {
+          displayedTextLength = text.length;
+          fitCounter(text);
+        }
+      } else if (forceFit) {
+        fitCounter(displayedCount.toLocaleString('en-US'));
       }
     }
 
     function fitCounter(text) {
-      const availableWidth = Math.max(72, Math.min(canvasWidth * 0.92, BOARD_WIDTH * boardScale * 0.94));
-      const maximumSize = Math.min(124, canvasHeight * 0.155);
-      let fontSize = maximumSize;
-      measurementContext.font = `900 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+      const availableWidth = Math.max(72, canvasWidth * 0.92);
+      const maximumSize = Math.min(112, canvasHeight * 0.14);
+      measurementContext.font = `900 ${maximumSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
       const measuredWidth = measurementContext.measureText(text).width;
-      if (measuredWidth > availableWidth) {
-        fontSize = Math.max(24, fontSize * availableWidth / measuredWidth);
-      }
+      const fontSize = measuredWidth > availableWidth
+        ? Math.max(20, maximumSize * availableWidth / measuredWidth)
+        : maximumSize;
       countElement.style.fontSize = `${fontSize.toFixed(2)}px`;
     }
 
-    function animationFrame(timestamp) {
-      Engine.update(engine, FIXED_STEP);
-      processPendingSplits(performance.now());
-      wakeSlowBalls(performance.now());
-      limitVelocities();
-      updateSparks(FIXED_STEP / 1000);
-      draw();
-      requestAnimationFrame(animationFrame);
+    function randomRange(minimum, maximum) {
+      return minimum + Math.random() * (maximum - minimum);
     }
 
-    function draw() {
-      context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
-      context.clearRect(0, 0, canvasWidth, canvasHeight);
-      context.fillStyle = '#030408';
-      context.fillRect(0, 0, canvasWidth, canvasHeight);
-
-      context.save();
-      context.translate(boardOffsetX, boardOffsetY);
-      context.scale(boardScale, boardScale);
-      drawBoard();
-      drawObstacles();
-      drawSparks();
-      drawBalls();
-      context.restore();
+    function clamp01(value) {
+      return value < 0 ? 0 : value > 1 ? 1 : value;
     }
 
-    function drawBoard() {
-      const gradient = context.createLinearGradient(0, 0, 0, BOARD_HEIGHT);
-      gradient.addColorStop(0, '#050718');
-      gradient.addColorStop(0.55, '#050b1b');
-      gradient.addColorStop(1, '#030713');
-      context.fillStyle = gradient;
-      context.fillRect(0, 0, BOARD_WIDTH, BOARD_HEIGHT);
-
-      context.save();
-      context.beginPath();
-      context.rect(0, 0, BOARD_WIDTH, BOARD_HEIGHT);
-      context.clip();
-      context.strokeStyle = 'rgba(93, 248, 255, .055)';
-      context.lineWidth = 1;
-      context.beginPath();
-      for (let x = 39.3; x < BOARD_WIDTH; x += 39.3) {
-        context.moveTo(x, 0);
-        context.lineTo(x, BOARD_HEIGHT);
-      }
-      for (let y = 42.5; y < BOARD_HEIGHT; y += 42.5) {
-        context.moveTo(0, y);
-        context.lineTo(BOARD_WIDTH, y);
-      }
-      context.stroke();
-      context.restore();
-
-      context.save();
-      context.shadowColor = 'rgba(93, 248, 255, .9)';
-      context.shadowBlur = 14;
-      context.strokeStyle = 'rgba(150, 245, 255, .95)';
-      context.lineWidth = 3.5;
-      context.strokeRect(1.75, 1.75, BOARD_WIDTH - 3.5, BOARD_HEIGHT - 3.5);
-      context.restore();
-    }
-
-    function drawObstacles() {
-      for (const obstacle of obstacles) {
-        const body = obstacle.body;
-        context.save();
-        context.shadowColor = obstacle.color;
-        context.shadowBlur = 11;
-        context.strokeStyle = obstacle.color;
-        context.fillStyle = 'rgba(8, 22, 38, .68)';
-        context.lineWidth = 2.5;
-        context.lineJoin = 'round';
-
-        if (body.circleRadius) {
-          context.beginPath();
-          context.arc(body.position.x, body.position.y, body.circleRadius, 0, Math.PI * 2);
-          context.fill();
-          context.stroke();
-        } else {
-          const vertices = body.vertices;
-          context.beginPath();
-          context.moveTo(vertices[0].x, vertices[0].y);
-          for (let index = 1; index < vertices.length; index++) {
-            context.lineTo(vertices[index].x, vertices[index].y);
-          }
-          context.closePath();
-          context.fill();
-          context.stroke();
-        }
-        context.restore();
-      }
-    }
-
-    function drawSparks() {
-      context.save();
-      context.globalCompositeOperation = 'lighter';
-      for (const spark of sparks) {
-        if (!spark.life) continue;
-        const progress = spark.age / spark.life;
-        const size = spark.size * (2.4 - progress * 1.25);
-        context.globalAlpha = 1 - progress;
-        context.drawImage(spark.sprite, spark.x - size / 2, spark.y - size / 2, size, size);
-      }
-      context.restore();
-    }
-
-    function drawBalls() {
-      if (!launched) {
-        drawBall(queuedBall.x, queuedBall.y, queuedBall.colorIndex, 0.85);
-        return;
-      }
-
-      context.save();
-      context.globalCompositeOperation = 'lighter';
-      const spriteSize = BALL_RADIUS * 3.6;
-      for (const body of balls) {
-        context.drawImage(
-          ballSprites[body.plugin.colorIndex],
-          body.position.x - spriteSize / 2,
-          body.position.y - spriteSize / 2,
-          spriteSize,
-          spriteSize
-        );
-      }
-      context.restore();
-    }
-
-    function drawBall(x, y, colorIndex, alpha) {
-      const spriteSize = BALL_RADIUS * 3.6;
-      context.save();
-      context.globalCompositeOperation = 'lighter';
-      context.globalAlpha = alpha;
-      context.drawImage(
-        ballSprites[colorIndex],
-        x - spriteSize / 2,
-        y - spriteSize / 2,
-        spriteSize,
-        spriteSize
-      );
-      context.restore();
+    function clampToRange(value, minimum, maximum) {
+      return value < minimum ? minimum : value > maximum ? maximum : value;
     }
   </script>
 </body>
