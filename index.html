@@ -7,7 +7,12 @@
   <style>
     :root { color-scheme: dark; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: #030408; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #030408;
+    }
     body {
       touch-action: none;
       user-select: none;
@@ -16,261 +21,334 @@
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     canvas { display: block; }
-    #hud {
-      position: fixed;
-      inset: 0;
-      display: grid;
-      place-items: center;
-      pointer-events: none;
-    }
     #count {
+      position: fixed;
+      top: max(16px, 3vh);
+      left: 0;
+      right: 0;
       color: #fff;
-      font-weight: 1000;
-      line-height: .9;
-      letter-spacing: -.04em;
+      font-weight: 900;
+      line-height: .92;
+      letter-spacing: -.045em;
       font-variant-numeric: tabular-nums;
+      text-align: center;
       white-space: nowrap;
+      pointer-events: none;
       text-shadow:
-        0 0 18px rgba(120, 220, 255, .8),
-        0 0 54px rgba(80, 120, 255, .48),
-        0 4px 18px rgba(0, 0, 0, .65);
-      transform-origin: center;
+        0 0 18px rgba(120, 220, 255, .82),
+        0 0 56px rgba(80, 120, 255, .46),
+        0 4px 20px rgba(0, 0, 0, .68);
     }
   </style>
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-        "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
-      }
-    }
-  </script>
+  <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
 </head>
 <body>
-  <div id="hud"><div id="count">1</div></div>
+  <div id="count">0</div>
+  <canvas id="stage"></canvas>
 
-  <script type="module">
-    import * as THREE from 'three';
-    import * as CANNON from 'cannon-es';
+  <script>
+    const {
+      Bodies,
+      Body,
+      Composite,
+      Engine,
+      Events
+    } = Matter;
 
-    const MAX_BALLS = 1000;
-    const BALL_RADIUS = 0.085;
-    const ARENA_WIDTH = 6.5;
-    const ARENA_DEPTH = 4.2;
-    const ARENA_HEIGHT = 3.2;
-    const HALF_WIDTH = ARENA_WIDTH / 2;
-    const HALF_DEPTH = ARENA_DEPTH / 2;
+    const BOARD_WIDTH = 393;
+    const BOARD_HEIGHT = 850;
+    const WALL_THICKNESS = 20;
+    const MAX_BALLS = 1500;
+    const BALL_RADIUS = BOARD_WIDTH * 0.015;
     const SPLIT_COOLDOWN_MS = 500;
-    const FIXED_STEP = 1 / 60;
-    const BALL_GROUP = 1;
-    const BOUNDARY_GROUP = 2;
-    const SPARK_COUNT = 900;
-    const SPARKS_PER_SPLIT = 7;
+    const MAX_SPEED = 11.5;
+    const FIXED_STEP = 1000 / 60;
+    const WALL_CATEGORY = 0x0001;
+    const BALL_CATEGORY = 0x0002;
+    const DOUBLE_TAP_MS = 320;
+    const DOUBLE_TAP_DISTANCE = 42;
 
+    const canvas = document.getElementById('stage');
+    const context = canvas.getContext('2d');
     const countElement = document.getElementById('count');
-    const balls = [];
-    const clock = new THREE.Clock();
-    const palette = [
-      new THREE.Color(0x5df8ff),
-      new THREE.Color(0xff67e7),
-      new THREE.Color(0x9dff5a),
-      new THREE.Color(0xffd75d),
-      new THREE.Color(0x8b95ff),
-      new THREE.Color(0xff788e)
-    ];
+    const measurementContext = document.createElement('canvas').getContext('2d');
 
-    let ballCount = 0;
-    let displayedBallCount = -1;
-    let resizeTimer = 0;
-    let tapTimer = 0;
+    const palette = [
+      { core: 'rgba(255,255,255,1)', glow: '#5df8ff' },
+      { core: 'rgba(255,255,255,1)', glow: '#ff67e7' },
+      { core: 'rgba(255,255,255,1)', glow: '#9dff5a' },
+      { core: 'rgba(255,255,255,1)', glow: '#ffd75d' },
+      { core: 'rgba(255,255,255,1)', glow: '#8b95ff' },
+      { core: 'rgba(255,255,255,1)', glow: '#ff788e' }
+    ];
+    const ballSprites = palette.map(makeBallSprite);
+    const obstacles = [];
+    const balls = [];
+    const pendingSplits = [];
+    const sparks = new Array(900);
+
+    const queuedBall = {
+      x: BOARD_WIDTH * 0.5,
+      y: 170,
+      colorIndex: 0
+    };
+
+    const engine = Engine.create({
+      enableSleeping: false,
+      positionIterations: 4,
+      velocityIterations: 3,
+      constraintIterations: 1
+    });
+    const world = engine.world;
+    const wallOptions = {
+      isStatic: true,
+      restitution: 0.99,
+      friction: 0,
+      frictionStatic: 0,
+      collisionFilter: {
+        category: WALL_CATEGORY,
+        mask: BALL_CATEGORY
+      }
+    };
+
+    let launched = false;
+    let sparkCursor = 0;
     let lastTapTime = 0;
     let lastTapX = 0;
     let lastTapY = 0;
-    let activePointers = new Set();
-    let audioContext = null;
+    let lastWakeTime = 0;
     let lastTickTime = 0;
+    let lastCountLength = 1;
+    let audioContext = null;
+    let canvasWidth = 1;
+    let canvasHeight = 1;
+    let devicePixelRatio = 1;
+    let boardScale = 1;
+    let boardOffsetX = 0;
+    let boardOffsetY = 0;
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: false,
-      powerPreference: 'high-performance'
-    });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    document.body.prepend(renderer.domElement);
-
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x030408);
-
-    const camera = new THREE.PerspectiveCamera(
-      56,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      100
-    );
-    camera.position.set(0, 5.5, 16.2);
-    camera.lookAt(0, 0.9, 0);
-
-    const arenaMaterial = new THREE.MeshBasicMaterial({
-      color: 0x64d9ff,
-      transparent: true,
-      opacity: 0.085,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    });
-    const arenaFloor = new THREE.Mesh(
-      new THREE.PlaneGeometry(ARENA_WIDTH, ARENA_DEPTH),
-      arenaMaterial
-    );
-    arenaFloor.rotation.x = -Math.PI / 2;
-    arenaFloor.position.y = 0.01;
-    arenaFloor.renderOrder = 2;
-    scene.add(arenaFloor);
-
-    function addArenaWall(x, z, width, depth) {
-      const wall = new THREE.Mesh(
-        new THREE.BoxGeometry(width, ARENA_HEIGHT, depth),
-        arenaMaterial
-      );
-      wall.position.set(x, ARENA_HEIGHT / 2, z);
-      wall.renderOrder = 2;
-      scene.add(wall);
+    for (let index = 0; index < sparks.length; index++) {
+      sparks[index] = { life: 0 };
     }
 
-    addArenaWall(0, -HALF_DEPTH, ARENA_WIDTH + 0.16, 0.12);
-    addArenaWall(0, HALF_DEPTH, ARENA_WIDTH + 0.16, 0.12);
-    addArenaWall(-HALF_WIDTH, 0, 0.12, ARENA_DEPTH);
-    addArenaWall(HALF_WIDTH, 0, 0.12, ARENA_DEPTH);
+    addOuterWalls();
+    addAngledBar(82, 190, 180, 14, -0.38, '#5df8ff');
+    addAngledBar(312, 325, 168, 14, 0.42, '#ff67e7');
+    addAngledBar(100, 500, 188, 14, 0.34, '#9dff5a');
+    addAngledBar(288, 675, 160, 14, -0.45, '#ffd75d');
+    addTriangle(188, 402, 56, 0.22, '#8b95ff');
+    addTriangle(302, 580, 44, -0.18, '#ff788e');
+    addPeg(62, 110, 14, '#5df8ff');
+    addPeg(330, 155, 10, '#ff67e7');
+    addPeg(178, 270, 12, '#9dff5a');
+    addPeg(78, 615, 18, '#ffd75d');
+    addPeg(314, 778, 12, '#8b95ff');
+    addGappedBar(38, 442, 124, 12, '#ff788e');
+    addGappedBar(252, 442, 102, 12, '#ff788e');
+    addDiamond(197, 728, 54, '#5df8ff');
 
-    const arenaEdges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(ARENA_WIDTH, ARENA_HEIGHT, ARENA_DEPTH)),
-      new THREE.LineBasicMaterial({
-        color: 0x8cefff,
-        transparent: true,
-        opacity: 0.72
-      })
-    );
-    arenaEdges.position.y = ARENA_HEIGHT / 2;
-    scene.add(arenaEdges);
+    Events.on(engine, 'collisionStart', handleCollisions);
+    window.addEventListener('resize', resize, { passive: true });
+    window.addEventListener('orientationchange', resize, { passive: true });
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('contextmenu', event => event.preventDefault());
 
-    const world = new CANNON.World({
-      gravity: new CANNON.Vec3(0, -3.2, 0)
-    });
-    world.broadphase = new CANNON.SAPBroadphase(world);
-    world.solver.iterations = 4;
-    world.allowSleep = false;
+    resize();
+    refreshCountDisplay(true);
+    requestAnimationFrame(animationFrame);
 
-    const ballMaterial = new CANNON.Material('ball');
-    const boundaryMaterial = new CANNON.Material('boundary');
-    world.addContactMaterial(new CANNON.ContactMaterial(ballMaterial, boundaryMaterial, {
-      friction: 0,
-      restitution: 1
-    }));
+    function addOuterWalls() {
+      Composite.add(world, [
+        Bodies.rectangle(-WALL_THICKNESS / 2, BOARD_HEIGHT / 2, WALL_THICKNESS, BOARD_HEIGHT + WALL_THICKNESS * 2, wallOptions),
+        Bodies.rectangle(BOARD_WIDTH + WALL_THICKNESS / 2, BOARD_HEIGHT / 2, WALL_THICKNESS, BOARD_HEIGHT + WALL_THICKNESS * 2, wallOptions),
+        Bodies.rectangle(BOARD_WIDTH / 2, -WALL_THICKNESS / 2, BOARD_WIDTH + WALL_THICKNESS * 2, WALL_THICKNESS, wallOptions),
+        Bodies.rectangle(BOARD_WIDTH / 2, BOARD_HEIGHT + WALL_THICKNESS / 2, BOARD_WIDTH + WALL_THICKNESS * 2, WALL_THICKNESS, wallOptions)
+      ]);
+    }
 
-    function addBoundaryBody(shape, position, normal) {
-      const body = new CANNON.Body({
-        mass: 0,
-        material: boundaryMaterial,
-        shape,
-        position,
-        collisionFilterGroup: BOUNDARY_GROUP,
-        collisionFilterMask: BALL_GROUP
+    function addObstacle(body, color) {
+      Composite.add(world, body);
+      obstacles.push({ body, color });
+    }
+
+    function addAngledBar(x, y, width, height, angle, color) {
+      addObstacle(Bodies.rectangle(x, y, width, height, {
+        ...wallOptions,
+        angle
+      }), color);
+    }
+
+    function addTriangle(x, y, radius, angle, color) {
+      addObstacle(Bodies.polygon(x, y, 3, radius, {
+        ...wallOptions,
+        angle
+      }), color);
+    }
+
+    function addPeg(x, y, radius, color) {
+      addObstacle(Bodies.circle(x, y, radius, wallOptions), color);
+    }
+
+    function addGappedBar(x, y, width, height, color) {
+      addObstacle(Bodies.rectangle(x, y, width, height, wallOptions), color);
+    }
+
+    function addDiamond(x, y, size, color) {
+      addObstacle(Bodies.rectangle(x, y, size, size, {
+        ...wallOptions,
+        angle: Math.PI / 4
+      }), color);
+    }
+
+    function handleCollisions(event) {
+      const now = performance.now();
+
+      for (const pair of event.pairs) {
+        const parent = pair.bodyA.plugin.isBall ? pair.bodyA : pair.bodyB;
+        if (!parent.plugin.isBall) continue;
+        if (now - parent.plugin.lastSplitAt < SPLIT_COOLDOWN_MS) continue;
+        if (balls.length + pendingSplits.length >= MAX_BALLS) continue;
+
+        parent.plugin.lastSplitAt = now;
+        const normal = pair.collision.normal;
+        const towardOpenSpace = pair.bodyA === parent ? -1 : 1;
+        const separation = BALL_RADIUS * 2.35;
+        pendingSplits.push({
+          parent,
+          x: parent.position.x + normal.x * towardOpenSpace * separation + randomRange(-1.5, 1.5),
+          y: parent.position.y + normal.y * towardOpenSpace * separation + randomRange(-1.5, 1.5)
+        });
+      }
+    }
+
+    function createBallBody(x, y, velocityX, velocityY, colorIndex, lastSplitAt) {
+      const body = Bodies.circle(x, y, BALL_RADIUS, {
+        restitution: 0.99,
+        friction: 0,
+        frictionStatic: 0,
+        frictionAir: 0,
+        slop: 0.03,
+        collisionFilter: {
+          category: BALL_CATEGORY,
+          mask: WALL_CATEGORY
+        },
+        plugin: {
+          isBall: true,
+          lastSplitAt,
+          colorIndex
+        }
       });
-      body.arenaNormal = normal;
-      world.addBody(body);
+      Body.setVelocity(body, { x: velocityX, y: velocityY });
+      Composite.add(world, body);
       return body;
     }
 
-    addBoundaryBody(
-      new CANNON.Box(new CANNON.Vec3(HALF_WIDTH, 0.1, HALF_DEPTH)),
-      new CANNON.Vec3(0, -0.1, 0),
-      new CANNON.Vec3(0, 1, 0)
-    );
-    addBoundaryBody(
-      new CANNON.Box(new CANNON.Vec3(HALF_WIDTH + 0.08, ARENA_HEIGHT / 2, 0.08)),
-      new CANNON.Vec3(0, ARENA_HEIGHT / 2, -HALF_DEPTH - 0.08),
-      new CANNON.Vec3(0, 0, 1)
-    );
-    addBoundaryBody(
-      new CANNON.Box(new CANNON.Vec3(HALF_WIDTH + 0.08, ARENA_HEIGHT / 2, 0.08)),
-      new CANNON.Vec3(0, ARENA_HEIGHT / 2, HALF_DEPTH + 0.08),
-      new CANNON.Vec3(0, 0, -1)
-    );
-    addBoundaryBody(
-      new CANNON.Box(new CANNON.Vec3(0.08, ARENA_HEIGHT / 2, HALF_DEPTH)),
-      new CANNON.Vec3(-HALF_WIDTH - 0.08, ARENA_HEIGHT / 2, 0),
-      new CANNON.Vec3(1, 0, 0)
-    );
-    addBoundaryBody(
-      new CANNON.Box(new CANNON.Vec3(0.08, ARENA_HEIGHT / 2, HALF_DEPTH)),
-      new CANNON.Vec3(HALF_WIDTH + 0.08, ARENA_HEIGHT / 2, 0),
-      new CANNON.Vec3(-1, 0, 0)
-    );
+    function processPendingSplits(now) {
+      while (pendingSplits.length > 0) {
+        if (balls.length >= MAX_BALLS) break;
+        const request = pendingSplits.shift();
+        const x = clamp(request.x, BALL_RADIUS, BOARD_WIDTH - BALL_RADIUS);
+        const y = clamp(request.y, BALL_RADIUS, BOARD_HEIGHT - BALL_RADIUS);
+        const parentVelocity = request.parent.velocity;
+        const colorIndex = balls.length % palette.length;
+        const velocityX = parentVelocity.x + randomRange(-1.6, 1.6);
+        const velocityY = parentVelocity.y + randomRange(-1.1, 1.5);
+        const body = createBallBody(x, y, velocityX, velocityY, colorIndex, now);
+        balls.push(body);
+        limitVelocity(body);
+        emitSparks(request.parent.position.x, request.parent.position.y, colorIndex);
+      }
+      refreshCountDisplay();
+    }
 
-    const sharedSphereShape = new CANNON.Sphere(BALL_RADIUS);
-    const ballGeometry = new THREE.SphereGeometry(BALL_RADIUS, 10, 7);
-    const ballMeshMaterial = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      toneMapped: false
-    });
-    const ballMesh = new THREE.InstancedMesh(ballGeometry, ballMeshMaterial, MAX_BALLS);
-    ballMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    ballMesh.count = 0;
-    ballMesh.frustumCulled = false;
-    scene.add(ballMesh);
+    function launchInitialBall() {
+      const velocityX = randomRange(-3.8, 3.8);
+      const velocityY = randomRange(4.8, 7.2);
+      const now = performance.now();
+      const body = createBallBody(
+        queuedBall.x,
+        queuedBall.y,
+        velocityX,
+        velocityY,
+        queuedBall.colorIndex,
+        now
+      );
+      balls.push(body);
+      launched = true;
+      refreshCountDisplay();
+    }
 
-    const sparkPositions = new Float32Array(SPARK_COUNT * 3);
-    const sparkVelocities = new Float32Array(SPARK_COUNT * 3);
-    const sparkLifetimes = new Float32Array(SPARK_COUNT);
-    const sparkAges = new Float32Array(SPARK_COUNT);
-    const sparkBaseColors = new Float32Array(SPARK_COUNT * 3);
-    const sparkColors = new Float32Array(SPARK_COUNT * 3);
-    let sparkCursor = 0;
+    function resetBalls() {
+      for (const body of balls) {
+        Composite.remove(world, body);
+      }
+      balls.length = 0;
+      pendingSplits.length = 0;
+      launched = false;
+      for (const spark of sparks) spark.life = 0;
+      refreshCountDisplay(true);
+    }
 
-    const sparkGeometry = new THREE.BufferGeometry();
-    sparkGeometry.setAttribute('position', new THREE.BufferAttribute(sparkPositions, 3));
-    sparkGeometry.setAttribute('color', new THREE.BufferAttribute(sparkColors, 3));
-    const sparkMaterial = new THREE.PointsMaterial({
-      size: 0.11,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending
-    });
-    const sparks = new THREE.Points(sparkGeometry, sparkMaterial);
-    sparks.frustumCulled = false;
-    scene.add(sparks);
+    function handlePointerDown(event) {
+      event.preventDefault();
+      ensureAudio();
+      const now = performance.now();
+      const tapDistance = Math.hypot(event.clientX - lastTapX, event.clientY - lastTapY);
+      const isDoubleTap = launched && now - lastTapTime <= DOUBLE_TAP_MS && tapDistance <= DOUBLE_TAP_DISTANCE;
+
+      if (isDoubleTap) {
+        resetBalls();
+        lastTapTime = 0;
+        return;
+      }
+
+      lastTapTime = now;
+      lastTapX = event.clientX;
+      lastTapY = event.clientY;
+      if (!launched) launchInitialBall();
+    }
 
     function randomRange(minimum, maximum) {
       return minimum + Math.random() * (maximum - minimum);
     }
 
-    function fitCounter() {
-      const text = countElement.textContent;
-      const baseSize = Math.min(
-        window.innerWidth * 0.2,
-        window.innerHeight * 0.2,
-        170
-      );
-      const characterWidthRatio = 0.58;
-      const fittedSize = Math.min(
-        baseSize,
-        (window.innerWidth * 0.88) / (text.length * characterWidthRatio)
-      );
-      countElement.style.fontSize = `${Math.max(30, fittedSize)}px`;
+    function clamp(value, minimum, maximum) {
+      return Math.min(maximum, Math.max(minimum, value));
     }
 
-    function refreshCountDisplay() {
-      if (displayedBallCount === ballCount) return;
-      displayedBallCount = ballCount;
-      countElement.textContent = ballCount.toLocaleString('en-US');
-      fitCounter();
+    function wakeSlowBalls(now) {
+      if (now - lastWakeTime < 120) return;
+      lastWakeTime = now;
+
+      for (const body of balls) {
+        const speed = Math.hypot(body.velocity.x, body.velocity.y);
+        if (speed < 1.9) {
+          Body.applyForce(body, body.position, {
+            x: body.mass * randomRange(-0.0025, 0.0025),
+            y: body.mass * randomRange(-0.004, -0.0005)
+          });
+        }
+      }
+    }
+
+    function limitVelocities() {
+      for (const body of balls) limitVelocity(body);
+    }
+
+    function limitVelocity(body) {
+      const speed = Math.hypot(body.velocity.x, body.velocity.y);
+      if (speed <= MAX_SPEED) return;
+      const scale = MAX_SPEED / speed;
+      Body.setVelocity(body, {
+        x: body.velocity.x * scale,
+        y: body.velocity.y * scale
+      });
     }
 
     function ensureAudio() {
       const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextConstructor) return;
+
       if (!audioContext) {
         try {
           audioContext = new AudioContextConstructor();
@@ -279,6 +357,7 @@
           return;
         }
       }
+
       if (audioContext.state === 'suspended') {
         audioContext.resume().catch(() => {});
       }
@@ -290,301 +369,270 @@
       if (now - lastTickTime < 0.045) return;
       lastTickTime = now;
 
+      const intensity = Math.min(1, balls.length / MAX_BALLS);
       const oscillator = audioContext.createOscillator();
       const gain = audioContext.createGain();
-      const intensity = Math.sqrt(Math.min(1, ballCount / MAX_BALLS));
       oscillator.type = 'triangle';
-      oscillator.frequency.value = 285 + 515 * intensity;
+      oscillator.frequency.value = 280 + 440 * intensity;
       gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.05, now + 0.004);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.07);
+      gain.gain.exponentialRampToValueAtTime(0.04, now + 0.004);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.075);
       oscillator.connect(gain).connect(audioContext.destination);
       oscillator.start(now);
-      oscillator.stop(now + 0.08);
+      oscillator.stop(now + 0.085);
     }
 
-    function emitSparks(position, color) {
-      for (let index = 0; index < SPARKS_PER_SPLIT; index++) {
-        const sparkIndex = sparkCursor % SPARK_COUNT;
+    function emitSparks(x, y, colorIndex) {
+      const color = palette[colorIndex].glow;
+      for (let count = 0; count < 5; count++) {
+        const spark = sparks[sparkCursor % sparks.length];
         sparkCursor++;
-        const positionOffset = sparkIndex * 3;
-        sparkPositions[positionOffset] = position.x + randomRange(-0.03, 0.03);
-        sparkPositions[positionOffset + 1] = position.y + randomRange(-0.03, 0.03);
-        sparkPositions[positionOffset + 2] = position.z + randomRange(-0.03, 0.03);
-
         const angle = Math.random() * Math.PI * 2;
-        const elevation = randomRange(-0.7, 1.0);
-        const speed = randomRange(0.9, 2.0);
-        sparkVelocities[positionOffset] = Math.cos(angle) * speed;
-        sparkVelocities[positionOffset + 1] = elevation * speed * 0.7;
-        sparkVelocities[positionOffset + 2] = Math.sin(angle) * speed;
-        sparkLifetimes[sparkIndex] = randomRange(0.28, 0.48);
-        sparkAges[sparkIndex] = 0;
-        sparkBaseColors[positionOffset] = color.r;
-        sparkBaseColors[positionOffset + 1] = color.g;
-        sparkBaseColors[positionOffset + 2] = color.b;
+        const speed = randomRange(32, 82);
+        spark.x = x + randomRange(-3, 3);
+        spark.y = y + randomRange(-3, 3);
+        spark.velocityX = Math.cos(angle) * speed;
+        spark.velocityY = Math.sin(angle) * speed - 24;
+        spark.life = randomRange(0.24, 0.42);
+        spark.age = 0;
+        spark.size = randomRange(2.5, 4.5);
+        spark.sprite = makeColoredSparkSprite(color);
       }
-    }
-
-    function updateSparks(delta) {
-      for (let index = 0; index < SPARK_COUNT; index++) {
-        if (sparkLifetimes[index] === 0) continue;
-        sparkAges[index] += delta;
-        const progress = sparkAges[index] / sparkLifetimes[index];
-        const offset = index * 3;
-        if (progress >= 1) {
-          sparkLifetimes[index] = 0;
-          sparkColors[offset] = 0;
-          sparkColors[offset + 1] = 0;
-          sparkColors[offset + 2] = 0;
-          continue;
-        }
-
-        sparkPositions[offset] += sparkVelocities[offset] * delta;
-        sparkPositions[offset + 1] += sparkVelocities[offset + 1] * delta;
-        sparkPositions[offset + 2] += sparkVelocities[offset + 2] * delta;
-        sparkVelocities[offset + 1] -= 1.8 * delta;
-        const fade = 1 - progress;
-        sparkColors[offset] = sparkBaseColors[offset] * fade;
-        sparkColors[offset + 1] = sparkBaseColors[offset + 1] * fade;
-        sparkColors[offset + 2] = sparkBaseColors[offset + 2] * fade;
-      }
-
-      sparkGeometry.attributes.position.needsUpdate = true;
-      sparkGeometry.attributes.color.needsUpdate = true;
-    }
-
-    function clampPosition(body) {
-      const limitX = HALF_WIDTH - BALL_RADIUS;
-      const limitZ = HALF_DEPTH - BALL_RADIUS;
-      if (body.position.x < -limitX) {
-        body.position.x = -limitX;
-        body.velocity.x = Math.abs(body.velocity.x);
-      } else if (body.position.x > limitX) {
-        body.position.x = limitX;
-        body.velocity.x = -Math.abs(body.velocity.x);
-      }
-      if (body.position.z < -limitZ) {
-        body.position.z = -limitZ;
-        body.velocity.z = Math.abs(body.velocity.z);
-      } else if (body.position.z > limitZ) {
-        body.position.z = limitZ;
-        body.velocity.z = -Math.abs(body.velocity.z);
-      }
-      if (body.position.y < BALL_RADIUS) {
-        body.position.y = BALL_RADIUS;
-        body.velocity.y = Math.abs(body.velocity.y);
-      }
-    }
-
-    function regulateVelocity(body) {
-      const velocity = body.velocity;
-      const horizontalSpeed = Math.hypot(velocity.x, velocity.z);
-      if (horizontalSpeed > 0.0001) {
-        const targetSpeed = horizontalSpeed < 3.4
-          ? 4.0
-          : horizontalSpeed > 4.8
-            ? 4.4
-            : horizontalSpeed;
-        const scale = targetSpeed / horizontalSpeed;
-        velocity.x *= scale;
-        velocity.z *= scale;
-      } else {
-        velocity.x = randomRange(-4.0, 4.0);
-        velocity.z = randomRange(-2.5, 2.5);
-      }
-
-      if (body.position.y <= BALL_RADIUS + 0.04 && velocity.y < 2.25) {
-        velocity.y = Math.max(2.5, Math.abs(velocity.y));
-      } else if (Math.abs(velocity.y) > 3.6) {
-        velocity.y = Math.sign(velocity.y) * 3.6;
-      }
-    }
-
-    function createBallBody(position, velocity) {
-      const body = new CANNON.Body({
-        mass: 0.04,
-        material: ballMaterial,
-        shape: sharedSphereShape,
-        position,
-        velocity,
-        linearDamping: 0,
-        angularDamping: 0.9,
-        allowSleep: false,
-        collisionFilterGroup: BALL_GROUP,
-        collisionFilterMask: BOUNDARY_GROUP
-      });
-      body.lastSplitAt = performance.now();
-      body.addEventListener('collide', handleBallCollision);
-      world.addBody(body);
-      return body;
-    }
-
-    function createInitialBall() {
-      const position = new CANNON.Vec3(0, 0.55, 0);
-      const velocity = new CANNON.Vec3(
-        randomRange(-3.0, 3.0),
-        randomRange(2.6, 3.2),
-        randomRange(-1.9, 1.9)
-      );
-      const body = createBallBody(position, velocity);
-      const color = palette[balls.length % palette.length];
-      balls.push({ body, color });
-      ballMesh.setColorAt(0, color);
-      if (ballMesh.instanceColor) ballMesh.instanceColor.needsUpdate = true;
-      ballCount = 1;
-    }
-
-    function handleBallCollision(event) {
-      const parent = this;
-      const now = performance.now();
-      if (now - parent.lastSplitAt < SPLIT_COOLDOWN_MS) return;
-      if (balls.length >= MAX_BALLS) return;
-
-      const boundary = event.body;
-      if (!boundary || !boundary.arenaNormal) return;
-      const normal = boundary.arenaNormal;
-      const separation = BALL_RADIUS * 2.2;
-      const position = new CANNON.Vec3(
-        parent.position.x + normal.x * separation + randomRange(-0.03, 0.03),
-        parent.position.y + normal.y * separation + randomRange(-0.02, 0.02),
-        parent.position.z + normal.z * separation + randomRange(-0.03, 0.03)
-      );
-      position.x = Math.min(HALF_WIDTH - BALL_RADIUS, Math.max(-HALF_WIDTH + BALL_RADIUS, position.x));
-      position.z = Math.min(HALF_DEPTH - BALL_RADIUS, Math.max(-HALF_DEPTH + BALL_RADIUS, position.z));
-      position.y = Math.max(BALL_RADIUS, Math.min(ARENA_HEIGHT - BALL_RADIUS, position.y));
-
-      const velocity = new CANNON.Vec3(
-        parent.velocity.x + randomRange(-0.7, 0.7),
-        Math.min(3.6, Math.max(2.5, parent.velocity.y + randomRange(-0.4, 0.4))),
-        parent.velocity.z + randomRange(-0.45, 0.45)
-      );
-      const child = createBallBody(position, velocity);
-      child.lastSplitAt = now;
-      parent.lastSplitAt = now;
-      regulateVelocity(child);
-
-      const color = palette[balls.length % palette.length];
-      balls.push({ body: child, color });
-      ballCount = balls.length;
-      ballMesh.setColorAt(balls.length - 1, color);
-      if (ballMesh.instanceColor) ballMesh.instanceColor.needsUpdate = true;
-      emitSparks(parent.position, color);
       playTick();
     }
 
-    function addBallFromTap() {
-      if (balls.length >= MAX_BALLS) return;
-      const position = new CANNON.Vec3(
-        randomRange(-2.4, 2.4),
-        randomRange(0.5, 1.2),
-        randomRange(-1.4, 1.4)
-      );
-      const velocity = new CANNON.Vec3(
-        randomRange(-4.0, 4.0),
-        randomRange(2.6, 3.3),
-        randomRange(-2.5, 2.5)
-      );
-      const body = createBallBody(position, velocity);
-      regulateVelocity(body);
-      const color = palette[balls.length % palette.length];
-      balls.push({ body, color });
-      ballCount = balls.length;
-      ballMesh.setColorAt(balls.length - 1, color);
-      if (ballMesh.instanceColor) ballMesh.instanceColor.needsUpdate = true;
-      emitSparks(position, color);
-    }
-
-    function resetBalls() {
-      for (const ball of balls) {
-        ball.body.removeEventListener('collide', handleBallCollision);
-        world.removeBody(ball.body);
+    function updateSparks(deltaSeconds) {
+      for (const spark of sparks) {
+        if (!spark.life) continue;
+        spark.age += deltaSeconds;
+        if (spark.age >= spark.life) {
+          spark.life = 0;
+          continue;
+        }
+        spark.x += spark.velocityX * deltaSeconds;
+        spark.y += spark.velocityY * deltaSeconds;
+        spark.velocityY += 70 * deltaSeconds;
       }
-      balls.length = 0;
-      ballMesh.count = 0;
-      createInitialBall();
     }
 
-    function updateBallMesh() {
-      const matrix = new THREE.Matrix4();
-      for (let index = 0; index < balls.length; index++) {
-        const body = balls[index].body;
-        matrix.makeTranslation(body.position.x, body.position.y, body.position.z);
-        ballMesh.setMatrixAt(index, matrix);
+    function makeBallSprite(color) {
+      const sprite = document.createElement('canvas');
+      const size = 48;
+      sprite.width = size;
+      sprite.height = size;
+      const spriteContext = sprite.getContext('2d');
+      const radius = size / 2;
+      const gradient = spriteContext.createRadialGradient(radius, radius, 0, radius, radius, radius);
+      gradient.addColorStop(0, color.core);
+      gradient.addColorStop(0.25, color.glow);
+      gradient.addColorStop(0.54, hexToRgba(color.glow, 0.35));
+      gradient.addColorStop(1, hexToRgba(color.glow, 0));
+      spriteContext.fillStyle = gradient;
+      spriteContext.fillRect(0, 0, size, size);
+      return sprite;
+    }
+
+    function makeColoredSparkSprite(color) {
+      if (makeColoredSparkSprite.cache.has(color)) {
+        return makeColoredSparkSprite.cache.get(color);
       }
-      ballMesh.count = balls.length;
-      ballMesh.instanceMatrix.needsUpdate = true;
+
+      const sprite = document.createElement('canvas');
+      sprite.width = 32;
+      sprite.height = 32;
+      const spriteContext = sprite.getContext('2d');
+      const gradient = spriteContext.createRadialGradient(16, 16, 0, 16, 16, 16);
+      gradient.addColorStop(0, 'rgba(255,255,255,1)');
+      gradient.addColorStop(0.32, color);
+      gradient.addColorStop(1, hexToRgba(color, 0));
+      spriteContext.fillStyle = gradient;
+      spriteContext.fillRect(0, 0, 32, 32);
+      makeColoredSparkSprite.cache.set(color, sprite);
+      return sprite;
     }
 
-    function onResize() {
-      const width = window.innerWidth;
-      const height = window.innerHeight;
-      renderer.setSize(width, height);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-      fitCounter();
+    makeColoredSparkSprite.cache = new Map();
+
+    function hexToRgba(hex, alpha) {
+      const value = parseInt(hex.slice(1), 16);
+      return `rgba(${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}, ${alpha})`;
     }
 
-    window.addEventListener('resize', onResize);
-    window.addEventListener('orientationchange', () => {
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(onResize, 120);
-    });
+    function resize() {
+      canvasWidth = window.innerWidth;
+      canvasHeight = window.innerHeight;
+      devicePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(canvasWidth * devicePixelRatio);
+      canvas.height = Math.round(canvasHeight * devicePixelRatio);
+      canvas.style.width = `${canvasWidth}px`;
+      canvas.style.height = `${canvasHeight}px`;
+      boardScale = Math.min(canvasWidth / BOARD_WIDTH, canvasHeight / BOARD_HEIGHT);
+      boardOffsetX = (canvasWidth - BOARD_WIDTH * boardScale) / 2;
+      boardOffsetY = (canvasHeight - BOARD_HEIGHT * boardScale) / 2;
+      refreshCountDisplay(true);
+    }
 
-    window.addEventListener('pointerdown', event => {
-      event.preventDefault();
-      ensureAudio();
-      activePointers.add(event.pointerId);
-      if (activePointers.size > 1) {
-        clearTimeout(tapTimer);
-        tapTimer = 0;
+    function refreshCountDisplay(forceFit = false) {
+      const text = balls.length.toLocaleString('en-US');
+      countElement.textContent = text;
+      if (forceFit || text.length !== lastCountLength) {
+        lastCountLength = text.length;
+        fitCounter(text);
+      }
+    }
+
+    function fitCounter(text) {
+      const availableWidth = Math.max(72, Math.min(canvasWidth * 0.92, BOARD_WIDTH * boardScale * 0.94));
+      const maximumSize = Math.min(124, canvasHeight * 0.155);
+      let fontSize = maximumSize;
+      measurementContext.font = `900 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+      const measuredWidth = measurementContext.measureText(text).width;
+      if (measuredWidth > availableWidth) {
+        fontSize = Math.max(24, fontSize * availableWidth / measuredWidth);
+      }
+      countElement.style.fontSize = `${fontSize.toFixed(2)}px`;
+    }
+
+    function animationFrame(timestamp) {
+      Engine.update(engine, FIXED_STEP);
+      processPendingSplits(performance.now());
+      wakeSlowBalls(performance.now());
+      limitVelocities();
+      updateSparks(FIXED_STEP / 1000);
+      draw();
+      requestAnimationFrame(animationFrame);
+    }
+
+    function draw() {
+      context.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      context.clearRect(0, 0, canvasWidth, canvasHeight);
+      context.fillStyle = '#030408';
+      context.fillRect(0, 0, canvasWidth, canvasHeight);
+
+      context.save();
+      context.translate(boardOffsetX, boardOffsetY);
+      context.scale(boardScale, boardScale);
+      drawBoard();
+      drawObstacles();
+      drawSparks();
+      drawBalls();
+      context.restore();
+    }
+
+    function drawBoard() {
+      const gradient = context.createLinearGradient(0, 0, 0, BOARD_HEIGHT);
+      gradient.addColorStop(0, '#050718');
+      gradient.addColorStop(0.55, '#050b1b');
+      gradient.addColorStop(1, '#030713');
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, BOARD_WIDTH, BOARD_HEIGHT);
+
+      context.save();
+      context.beginPath();
+      context.rect(0, 0, BOARD_WIDTH, BOARD_HEIGHT);
+      context.clip();
+      context.strokeStyle = 'rgba(93, 248, 255, .055)';
+      context.lineWidth = 1;
+      context.beginPath();
+      for (let x = 39.3; x < BOARD_WIDTH; x += 39.3) {
+        context.moveTo(x, 0);
+        context.lineTo(x, BOARD_HEIGHT);
+      }
+      for (let y = 42.5; y < BOARD_HEIGHT; y += 42.5) {
+        context.moveTo(0, y);
+        context.lineTo(BOARD_WIDTH, y);
+      }
+      context.stroke();
+      context.restore();
+
+      context.save();
+      context.shadowColor = 'rgba(93, 248, 255, .9)';
+      context.shadowBlur = 14;
+      context.strokeStyle = 'rgba(150, 245, 255, .95)';
+      context.lineWidth = 3.5;
+      context.strokeRect(1.75, 1.75, BOARD_WIDTH - 3.5, BOARD_HEIGHT - 3.5);
+      context.restore();
+    }
+
+    function drawObstacles() {
+      for (const obstacle of obstacles) {
+        const body = obstacle.body;
+        context.save();
+        context.shadowColor = obstacle.color;
+        context.shadowBlur = 11;
+        context.strokeStyle = obstacle.color;
+        context.fillStyle = 'rgba(8, 22, 38, .68)';
+        context.lineWidth = 2.5;
+        context.lineJoin = 'round';
+
+        if (body.circleRadius) {
+          context.beginPath();
+          context.arc(body.position.x, body.position.y, body.circleRadius, 0, Math.PI * 2);
+          context.fill();
+          context.stroke();
+        } else {
+          const vertices = body.vertices;
+          context.beginPath();
+          context.moveTo(vertices[0].x, vertices[0].y);
+          for (let index = 1; index < vertices.length; index++) {
+            context.lineTo(vertices[index].x, vertices[index].y);
+          }
+          context.closePath();
+          context.fill();
+          context.stroke();
+        }
+        context.restore();
+      }
+    }
+
+    function drawSparks() {
+      context.save();
+      context.globalCompositeOperation = 'lighter';
+      for (const spark of sparks) {
+        if (!spark.life) continue;
+        const progress = spark.age / spark.life;
+        const size = spark.size * (2.4 - progress * 1.25);
+        context.globalAlpha = 1 - progress;
+        context.drawImage(spark.sprite, spark.x - size / 2, spark.y - size / 2, size, size);
+      }
+      context.restore();
+    }
+
+    function drawBalls() {
+      if (!launched) {
+        drawBall(queuedBall.x, queuedBall.y, queuedBall.colorIndex, 0.85);
         return;
       }
 
-      const now = performance.now();
-      const tapDistance = Math.hypot(event.clientX - lastTapX, event.clientY - lastTapY);
-      if (now - lastTapTime <= 280 && tapDistance < 40) {
-        clearTimeout(tapTimer);
-        tapTimer = 0;
-        lastTapTime = 0;
-        resetBalls();
-        playTick();
-        return;
+      context.save();
+      context.globalCompositeOperation = 'lighter';
+      const spriteSize = BALL_RADIUS * 3.6;
+      for (const body of balls) {
+        context.drawImage(
+          ballSprites[body.plugin.colorIndex],
+          body.position.x - spriteSize / 2,
+          body.position.y - spriteSize / 2,
+          spriteSize,
+          spriteSize
+        );
       }
-
-      lastTapTime = now;
-      lastTapX = event.clientX;
-      lastTapY = event.clientY;
-      clearTimeout(tapTimer);
-      tapTimer = setTimeout(() => {
-        tapTimer = 0;
-        addBallFromTap();
-      }, 300);
-    });
-
-    window.addEventListener('pointerup', event => activePointers.delete(event.pointerId));
-    window.addEventListener('pointercancel', event => activePointers.delete(event.pointerId));
-    window.addEventListener('contextmenu', event => event.preventDefault());
-
-    createInitialBall();
-    onResize();
-
-    function animate() {
-      requestAnimationFrame(animate);
-      const delta = Math.min(clock.getDelta(), 0.05);
-      world.step(FIXED_STEP, delta, 2);
-
-      for (const ball of balls) {
-        regulateVelocity(ball.body);
-        clampPosition(ball.body);
-      }
-      updateBallMesh();
-      refreshCountDisplay();
-      updateSparks(delta);
-      renderer.render(scene, camera);
+      context.restore();
     }
 
-    animate();
+    function drawBall(x, y, colorIndex, alpha) {
+      const spriteSize = BALL_RADIUS * 3.6;
+      context.save();
+      context.globalCompositeOperation = 'lighter';
+      context.globalAlpha = alpha;
+      context.drawImage(
+        ballSprites[colorIndex],
+        x - spriteSize / 2,
+        y - spriteSize / 2,
+        spriteSize,
+        spriteSize
+      );
+      context.restore();
+    }
   </script>
 </body>
 </html>
